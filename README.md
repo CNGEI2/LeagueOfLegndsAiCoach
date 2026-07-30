@@ -37,6 +37,8 @@ make dev-frontend
 
 Open `http://localhost:3000`, `http://localhost:3000/zh-CN`, or `http://localhost:3000/en-US`.
 
+The root `.env` is the single local configuration entry point: Compose reads it automatically, the backend resolves it from the repository root, and Next.js loads it during local development and builds. Changes to `NEXT_PUBLIC_API_BASE_URL` require restarting the frontend development server or rebuilding the frontend image because public variables are compiled into the browser bundle.
+
 ### Docker Setup
 
 ```bash
@@ -71,7 +73,6 @@ make verify
 | `DATABASE_URL` | SQLAlchemy async PostgreSQL URL. |
 | `BACKEND_CORS_ORIGINS` | Comma-separated allowed frontend origins. |
 | `NEXT_PUBLIC_API_BASE_URL` | Browser-visible backend base URL; it contains no secret and is supplied to the frontend image at build time. |
-| `DEFAULT_LOCALE` | Default product locale, `zh-CN` or `en-US`. |
 | `RIOT_API_KEY` | Empty and unused in Phase 1; server-only in Phase 2. |
 | `OPENAI_API_KEY` | Empty and unused in Phase 1; server-only in Phase 4. |
 | `OPENAI_MODEL` | Future configurable coaching model; defaults to `gpt-5.6-terra`. |
@@ -138,6 +139,8 @@ make dev-frontend
 
 打开 `http://localhost:3000`、`http://localhost:3000/zh-CN` 或 `http://localhost:3000/en-US`。
 
+根目录 `.env` 是唯一的本地配置入口：Compose 会自动读取它，后端会从仓库根目录解析它，Next.js 则会在本地开发和构建时加载它。`NEXT_PUBLIC_API_BASE_URL` 属于编译进浏览器包的公开变量，修改后需要重启前端开发服务器或重新构建前端镜像。
+
 ### Docker 启动
 
 ```bash
@@ -172,7 +175,6 @@ make verify
 | `DATABASE_URL` | SQLAlchemy 异步 PostgreSQL URL。 |
 | `BACKEND_CORS_ORIGINS` | 以逗号分隔的允许前端来源。 |
 | `NEXT_PUBLIC_API_BASE_URL` | 浏览器可见的后端基础 URL；不含密钥，并在构建前端镜像时传入。 |
-| `DEFAULT_LOCALE` | 默认产品语言，`zh-CN` 或 `en-US`。 |
 | `RIOT_API_KEY` | Phase 1 为空且未使用；Phase 2 起仅在服务端使用。 |
 | `OPENAI_API_KEY` | Phase 1 为空且未使用；Phase 4 起仅在服务端使用。 |
 | `OPENAI_MODEL` | 未来可配置的教练模型；默认值为 `gpt-5.6-terra`。 |
