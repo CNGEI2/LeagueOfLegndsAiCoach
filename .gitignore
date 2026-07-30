@@ -1,9 +1,18 @@
 .worktrees/
 
-# Python development artifacts
+.DS_Store
+.env
+.env.*
+!.env.example
 __pycache__/
 *.egg-info/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 .venv/
+*.pyc
+node_modules/
+.next/
+coverage/
+dist/
+*.log
