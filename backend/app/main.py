@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.health import router as health_router
 from app.core.config import Settings
 from app.core.database import Database, DatabaseProtocol
+from app.core.errors import ApiError, api_error_handler
+from app.core.request_id import RequestIdMiddleware
 
 
 def create_app(
@@ -23,6 +25,8 @@ def create_app(
         await resolved_database.close()
 
     application = FastAPI(title="LoL AI Coach API", version="0.1.0", lifespan=lifespan)
+    application.add_middleware(RequestIdMiddleware)
+    application.add_exception_handler(ApiError, api_error_handler)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_origins,

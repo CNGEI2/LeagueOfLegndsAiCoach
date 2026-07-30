@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request, status
 
 from app.core.database import DatabaseProtocol
+from app.core.errors import ApiError
 from app.schemas.health import HealthResponse
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -17,8 +18,10 @@ async def ready(request: Request) -> HealthResponse:
     try:
         await database.ping()
     except Exception as exc:
-        raise HTTPException(
+        raise ApiError(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "SERVICE_NOT_READY", "retryable": True},
+            code="SERVICE_NOT_READY",
+            message="Service is temporarily unavailable.",
+            retryable=True,
         ) from exc
     return HealthResponse()

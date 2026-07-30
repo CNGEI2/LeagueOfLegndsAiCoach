@@ -100,7 +100,10 @@ lol-ai-coach/
 - Create: `backend/app/core/__init__.py`
 - Create: `backend/app/core/config.py`
 - Create: `backend/app/core/database.py`
+- Create: `backend/app/core/errors.py`
+- Create: `backend/app/core/request_id.py`
 - Create: `backend/app/schemas/__init__.py`
+- Create: `backend/app/schemas/errors.py`
 - Create: `backend/app/schemas/health.py`
 - Create: `backend/tests/__init__.py`
 - Create: `backend/tests/conftest.py`
@@ -111,7 +114,7 @@ lol-ai-coach/
 - Consumes: Environment variables `APP_ENV`, `DATABASE_URL`, and `BACKEND_CORS_ORIGINS`.
 - Produces: `Settings`, `Database`, `create_app(settings: Settings | None = None, database: Database | None = None) -> FastAPI`, `GET /health/live`, and `GET /health/ready`.
 - Produces response shape: `{"status": "ok", "service": "lol-ai-coach-backend"}` for healthy probes.
-- Produces failure shape: HTTP 503 with `{"detail": {"code": "SERVICE_NOT_READY", "retryable": true}}` when the database ping fails.
+- Produces failure shape: HTTP 503 with `{"error": {"code": "SERVICE_NOT_READY", "message": "Service is temporarily unavailable.", "params": {}, "retryable": true, "request_id": "request-correlation-id"}}` when the database ping fails.
 
 - [ ] **Step 1: Create the Python package configuration**
 
@@ -137,7 +140,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "httpx>=0.28,<1.0",
+  "httpx2>=2.7,<3.0",
   "mypy>=1.16,<2.0",
   "pytest>=8.4,<9.0",
   "pytest-asyncio>=1.0,<2.0",
@@ -225,12 +228,14 @@ def test_readiness_returns_safe_503_when_database_fails(
     response = unavailable_client.get("/health/ready")
 
     assert response.status_code == 503
-    assert response.json() == {
-        "detail": {
-            "code": "SERVICE_NOT_READY",
-            "retryable": True,
-        }
-    }
+    payload = response.json()
+    assert set(payload) == {"error"}
+    assert payload["error"]["code"] == "SERVICE_NOT_READY"
+    assert payload["error"]["params"] == {}
+    assert payload["error"]["retryable"] is True
+    assert payload["error"]["message"]
+    assert payload["error"]["request_id"] == response.headers["X-Request-ID"]
+    assert "database unavailable" not in response.text
 ```
 
 Create `backend/tests/conftest.py` with a typed fake and fixtures:
@@ -363,9 +368,10 @@ class HealthResponse(BaseModel):
 Create `backend/app/api/health.py`:
 
 ```python
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request, status
 
 from app.core.database import DatabaseProtocol
+from app.core.errors import ApiError
 from app.schemas.health import HealthResponse
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -382,9 +388,11 @@ async def ready(request: Request) -> HealthResponse:
     try:
         await database.ping()
     except Exception as exc:
-        raise HTTPException(
+        raise ApiError(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "SERVICE_NOT_READY", "retryable": True},
+            code="SERVICE_NOT_READY",
+            message="Service is temporarily unavailable.",
+            retryable=True,
         ) from exc
     return HealthResponse()
 ```
@@ -401,6 +409,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.health import router as health_router
 from app.core.config import Settings
 from app.core.database import Database, DatabaseProtocol
+from app.core.errors import ApiError, api_error_handler
+from app.core.request_id import RequestIdMiddleware
 
 
 def create_app(
@@ -417,6 +427,8 @@ def create_app(
         await resolved_database.close()
 
     application = FastAPI(title="LoL AI Coach API", version="0.1.0", lifespan=lifespan)
+    application.add_middleware(RequestIdMiddleware)
+    application.add_exception_handler(ApiError, api_error_handler)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_origins,

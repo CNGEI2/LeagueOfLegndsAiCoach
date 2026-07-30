@@ -25,9 +25,11 @@ def test_readiness_returns_safe_503_when_database_fails(
     response = unavailable_client.get("/health/ready")
 
     assert response.status_code == 503
-    assert response.json() == {
-        "detail": {
-            "code": "SERVICE_NOT_READY",
-            "retryable": True,
-        }
-    }
+    payload = response.json()
+    assert set(payload) == {"error"}
+    assert payload["error"]["code"] == "SERVICE_NOT_READY"
+    assert payload["error"]["params"] == {}
+    assert payload["error"]["retryable"] is True
+    assert payload["error"]["message"]
+    assert payload["error"]["request_id"] == response.headers["X-Request-ID"]
+    assert "database unavailable" not in response.text
