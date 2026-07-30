@@ -58,6 +58,7 @@ lol-ai-coach/
 │       └── test_health.py               health endpoint behavior
 └── frontend/
     ├── Dockerfile                       Next.js standalone image
+    ├── .dockerignore                    Docker build-context exclusions
     ├── package.json                     scripts and dependencies
     ├── pnpm-lock.yaml                   exact frontend dependency lock
     ├── next.config.ts                   standalone output
@@ -1142,7 +1143,7 @@ Create `frontend/Dockerfile`:
 FROM node:22-alpine AS dependencies
 WORKDIR /app
 RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM node:22-alpine AS builder
@@ -1150,6 +1151,8 @@ WORKDIR /app
 RUN corepack enable
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 RUN pnpm build
 
 FROM node:22-alpine AS runner
@@ -1160,6 +1163,22 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 EXPOSE 3000
 CMD ["node", "server.js"]
+```
+
+Create `frontend/.dockerignore` so host dependencies and generated artifacts do not enter the Linux image build context:
+
+```gitignore
+node_modules/
+.next/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 ```
 
 If `public/` does not exist after scaffolding, create the empty `frontend/public/.gitkeep` before building so the Docker copy is deterministic.
@@ -1204,9 +1223,10 @@ services:
       retries: 10
 
   frontend:
-    build: ./frontend
-    environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     ports:
       - "3000:3000"
     depends_on:
@@ -1449,7 +1469,7 @@ The command runs backend/frontend tests, lint, formatting checks, type checks, a
 | `POSTGRES_PASSWORD` | Local Compose database password; replace the development default outside local use. |
 | `DATABASE_URL` | SQLAlchemy async PostgreSQL URL. |
 | `BACKEND_CORS_ORIGINS` | Comma-separated allowed frontend origins. |
-| `NEXT_PUBLIC_API_BASE_URL` | Browser-visible backend base URL; it contains no secret. |
+| `NEXT_PUBLIC_API_BASE_URL` | Browser-visible backend base URL; it contains no secret and is supplied to the frontend image at build time. |
 | `DEFAULT_LOCALE` | Default product locale, `zh-CN` or `en-US`. |
 | `RIOT_API_KEY` | Empty and unused in Phase 1; server-only in Phase 2. |
 | `OPENAI_API_KEY` | Empty and unused in Phase 1; server-only in Phase 4. |
