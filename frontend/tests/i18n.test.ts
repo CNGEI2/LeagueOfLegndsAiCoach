@@ -20,6 +20,14 @@ describe("locale resolution", () => {
     expect(resolveLocale("zh-CN;q=0,en-US;q=0.8")).toBe("en-US");
   });
 
+  it("does not let a Chinese parent preference re-enable disabled zh-CN", () => {
+    expect(resolveLocale("zh-CN;q=0,zh;q=1,en-US;q=0.5")).toBe("en-US");
+  });
+
+  it("does not let an English parent preference re-enable disabled en-US", () => {
+    expect(resolveLocale("en-US;q=0,en;q=1,zh-CN;q=0.5")).toBe("zh-CN");
+  });
+
   it("ignores an out-of-range quality value", () => {
     expect(resolveLocale("zh-CN;q=1.2,en-US;q=0.8")).toBe("en-US");
   });

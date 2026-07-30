@@ -9,7 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.health import router as health_router
 from app.core.config import Settings
 from app.core.database import Database, DatabaseProtocol
-from app.core.errors import ApiError, api_error_handler
+from app.core.errors import ApiError, UnhandledExceptionMiddleware, api_error_handler
 from app.core.request_id import RequestIdMiddleware
 
 
@@ -30,7 +30,7 @@ def create_app(
     application.add_exception_handler(ApiError, api_error_handler)
     application.add_exception_handler(RequestValidationError, api_error_handler)
     application.add_exception_handler(StarletteHTTPException, api_error_handler)
-    application.add_exception_handler(Exception, api_error_handler)
+    application.add_middleware(UnhandledExceptionMiddleware)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_origins,

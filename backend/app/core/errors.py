@@ -1,9 +1,10 @@
 from typing import Any
 
-from fastapi import Request
+from fastapi import Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.schemas.errors import ErrorDetail, ErrorResponse
 
@@ -87,3 +88,11 @@ async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:
         message="An unexpected error occurred.",
         retryable=True,
     )
+
+
+class UnhandledExceptionMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            return await api_error_handler(request, exc)

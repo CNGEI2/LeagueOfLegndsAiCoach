@@ -3,7 +3,9 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
 from app.core.errors import api_error_handler
+from app.main import create_app
 
 
 def test_missing_route_uses_the_error_envelope_and_request_id(client: TestClient) -> None:
@@ -39,6 +41,34 @@ def test_cors_preflight_includes_a_request_id(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.headers["X-Request-ID"]
+
+
+def test_unhandled_exceptions_keep_request_id_and_cors_headers(
+    settings: Settings,
+) -> None:
+    application = create_app(settings=settings)
+
+    @application.get("/test-only-unhandled-exception")
+    async def raise_unhandled_exception() -> None:
+        raise RuntimeError("database password: secret")
+
+    with TestClient(application, raise_server_exceptions=False) as test_client:
+        response = test_client.get(
+            "/test-only-unhandled-exception",
+            headers={"Origin": "http://localhost:3000"},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["error"] == {
+        "code": "INTERNAL_SERVER_ERROR",
+        "message": "An unexpected error occurred.",
+        "params": {},
+        "retryable": True,
+        "request_id": response.headers["X-Request-ID"],
+    }
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert response.headers["access-control-expose-headers"] == "X-Request-ID"
+    assert "secret" not in response.text
 
 
 @pytest.mark.asyncio

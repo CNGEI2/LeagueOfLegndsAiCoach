@@ -1095,7 +1095,6 @@ POSTGRES_PASSWORD=lol_ai_coach
 DATABASE_URL=postgresql+asyncpg://lol_ai_coach:lol_ai_coach@db:5432/lol_ai_coach
 BACKEND_CORS_ORIGINS=http://localhost:3000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-DEFAULT_LOCALE=en-US
 RIOT_API_KEY=
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.6-terra
@@ -1470,7 +1469,6 @@ The command runs backend/frontend tests, lint, formatting checks, type checks, a
 | `DATABASE_URL` | SQLAlchemy async PostgreSQL URL. |
 | `BACKEND_CORS_ORIGINS` | Comma-separated allowed frontend origins. |
 | `NEXT_PUBLIC_API_BASE_URL` | Browser-visible backend base URL; it contains no secret and is supplied to the frontend image at build time. |
-| `DEFAULT_LOCALE` | Default product locale, `zh-CN` or `en-US`. |
 | `RIOT_API_KEY` | Empty and unused in Phase 1; server-only in Phase 2. |
 | `OPENAI_API_KEY` | Empty and unused in Phase 1; server-only in Phase 4. |
 | `OPENAI_MODEL` | Future configurable coaching model; defaults to `gpt-5.6-terra`. |
