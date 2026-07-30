@@ -1,5 +1,6 @@
 export const enUS = {
   productName: "LoL AI Coach",
+  postGameReview: "POST-GAME REVIEW",
   headline: "Understand the match. Improve the next one.",
   description: "Enter a Riot ID to prepare a data-based post-game review.",
   gameName: "Game Name",

@@ -2,6 +2,7 @@ import type { Messages } from "./messages";
 
 export const zhCN: Messages = {
   productName: "LoL AI Coach",
+  postGameReview: "赛后复盘",
   headline: "看懂这一局，打好下一局。",
   description: "输入 Riot ID，准备生成基于赛后数据的复盘。",
   gameName: "游戏名称",

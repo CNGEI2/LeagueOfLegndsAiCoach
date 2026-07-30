@@ -116,3 +116,76 @@ locale params, and preserved root `.gitignore` content. There are no functional
 concerns. Vitest prints an informational Vite notice that
 `vite-tsconfig-paths` is now redundant, but it remains because the brief
 explicitly requires that plugin and configuration.
+
+## Fix Round 1
+
+### Changes
+
+- Added the typed `postGameReview` catalog entry with `POST-GAME REVIEW` for
+  `en-US` and `赛后复盘` for `zh-CN`; the homepage now renders
+  `messages.postGameReview` rather than fixed English text.
+- Added `tests/home-page.test.tsx`, which renders the `zh-CN` homepage and
+  requires `赛后复盘` while rejecting `POST-GAME REVIEW`.
+- Removed `vite-tsconfig-paths` from `package.json`, `pnpm-lock.yaml`, and the
+  Vitest plugin configuration. `vitest.config.ts` now uses Vite's native
+  `resolve.tsconfigPaths: true` setting.
+- Updated the Phase 1 plan and generated Task 2 brief to install no redundant
+  plugin and to use the same native Vite path-resolution setting.
+
+### RED evidence
+
+Before changing the catalog or homepage implementation, ran:
+
+```bash
+cd frontend
+pnpm test
+```
+
+The new behavior test failed exactly because the Chinese page still rendered the
+hardcoded English eyebrow:
+
+```text
+FAIL  tests/home-page.test.tsx > HomePage > renders the localized Simplified Chinese post-game review eyebrow
+TestingLibraryElementError: Unable to find an element with the text: 赛后复盘.
+
+<p class="eyebrow">
+  POST-GAME REVIEW
+</p>
+
+Test Files  1 failed | 2 passed (3)
+Tests  1 failed | 5 passed (6)
+```
+
+### GREEN and final gates
+
+After implementation, ran the requested commands:
+
+```bash
+cd frontend
+pnpm test
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+All exited 0. The final Vitest output was warning-free and contained no
+`vite-tsconfig-paths` informational notice:
+
+```text
+$ vitest run
+Test Files  3 passed (3)
+Tests  6 passed (6)
+```
+
+The other final outputs were:
+
+```text
+$ eslint .
+$ tsc --noEmit
+✓ Compiled successfully
+Route (app): /[locale] -> /zh-CN, /en-US
+ƒ Proxy (Middleware)
+```
+
+The prior redundant-plugin concern is resolved. No new concerns were found in
+this fix round.

@@ -506,7 +506,7 @@ From the repository root, run:
 ```bash
 pnpm create next-app@latest frontend --typescript --tailwind --eslint --app --src-dir --use-pnpm --import-alias '@/*' --yes
 cd frontend
-pnpm add -D vitest jsdom @testing-library/react @testing-library/jest-dom @testing-library/user-event vite-tsconfig-paths
+pnpm add -D vitest jsdom @testing-library/react @testing-library/jest-dom @testing-library/user-event
 ```
 
 Retain the generated Next.js, React, TypeScript, Tailwind, ESLint, and PostCSS versions in `pnpm-lock.yaml`. Add these scripts to `frontend/package.json`:
@@ -531,10 +531,11 @@ Create `frontend/vitest.config.ts`:
 
 ```typescript
 import { defineConfig } from "vitest/config";
-import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  resolve: {
+    tsconfigPaths: true,
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],

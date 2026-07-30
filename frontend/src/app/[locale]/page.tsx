@@ -21,7 +21,7 @@ export default async function HomePage({
         <LanguageSwitcher locale={locale} messages={messages} />
       </header>
       <section className="hero">
-        <p className="eyebrow">POST-GAME REVIEW</p>
+        <p className="eyebrow">{messages.postGameReview}</p>
         <h1>{messages.headline}</h1>
         <p>{messages.description}</p>
         <RiotSearchForm messages={messages} />
