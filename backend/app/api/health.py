@@ -14,13 +14,6 @@ async def live() -> HealthResponse:
 
 @router.get("/ready", response_model=HealthResponse)
 async def ready(request: Request) -> HealthResponse:
-    if not request.app.state.settings.riot_configured:
-        raise ApiError(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            code="RIOT_NOT_CONFIGURED",
-            message="Riot API is not configured.",
-            retryable=False,
-        )
     database: DatabaseProtocol = request.app.state.database
     try:
         await database.ping()

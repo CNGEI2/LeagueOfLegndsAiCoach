@@ -27,7 +27,6 @@ def create_app(
         await resolved_database.close()
 
     application = FastAPI(title="LoL AI Coach API", version="0.1.0", lifespan=lifespan)
-    application.state.settings = resolved_settings
     application.add_exception_handler(ApiError, api_error_handler)
     application.add_exception_handler(RequestValidationError, api_error_handler)
     application.add_exception_handler(StarletteHTTPException, api_error_handler)

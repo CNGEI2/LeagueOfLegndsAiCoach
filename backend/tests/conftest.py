@@ -28,7 +28,6 @@ def settings() -> Settings:
         app_env="test",
         database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
         backend_cors_origins="http://localhost:3000",
-        riot_api_key="RGAPI-test",
     )
 
 
