@@ -75,6 +75,8 @@ export function PlayerPageClient({
         <DataState
           state="error"
           messages={messages}
+          errorCode={state.error?.code}
+          errorParams={state.error?.params}
           requestId={state.error?.requestId}
           onRetry={() => setRetry((value) => value + 1)}
         />

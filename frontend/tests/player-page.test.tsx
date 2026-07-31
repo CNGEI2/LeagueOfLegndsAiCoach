@@ -152,18 +152,28 @@ describe("PlayerPageClient", () => {
     expect(getRecentMatches).toHaveBeenCalledTimes(2);
   });
 
-  it("shows a localized request ID in support details for safe API errors", async () => {
-    vi.mocked(getRecentMatches).mockRejectedValue(
-      new ApiClientError("RIOT_RATE_LIMITED", { retry_after_seconds: 12 }, true, "request-500"),
-    );
+  it("renders the Chinese rate-limit delay and retries a recent-match API error", async () => {
+    vi.mocked(getRecentMatches)
+      .mockRejectedValueOnce(
+        new ApiClientError(
+          "RIOT_RATE_LIMITED",
+          { retry_after_seconds: 12 },
+          true,
+          "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+        ),
+      )
+      .mockResolvedValueOnce(recentMatchesFixture);
     const user = userEvent.setup();
     render(<PlayerPageClient locale="zh-CN" puuid="puuid-1" platform="NA1" />);
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("无法加载近期对局。");
+    expect(alert).toHaveTextContent("Riot 服务繁忙，请在 12 秒后重试。");
     expect(screen.getByRole("button", { name: "重试" })).toBeVisible();
     await user.click(screen.getByText("支持详情"));
-    expect(screen.getByText("请求 ID：request-500")).toBeVisible();
+    expect(screen.getByText("请求 ID：a3f4c1d2e5b67890a1b2c3d4e5f60718")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("heading", { name: "PlayerName#1115" })).toBeVisible();
+    expect(getRecentMatches).toHaveBeenCalledTimes(2);
   });
 
   it("does not expose unsafe exception text for generic failures", async () => {

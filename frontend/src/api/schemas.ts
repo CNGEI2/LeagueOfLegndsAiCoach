@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const localeSchema = z.enum(["zh-CN", "en-US"]);
 export const platformSchema = z.enum(["NA1"]);
+const requestIdPattern = /^[0-9a-f]{32}$/;
+const requestIdSchema = z.string().transform((value) => (requestIdPattern.test(value) ? value : null));
 
 export const staticAssetSchema = z
   .object({
@@ -85,7 +87,7 @@ export const recentMatchItemSchema = z
 export const resolvePlayerResponseSchema = z
   .object({
     player: playerProfileSchema,
-    request_id: z.string(),
+    request_id: requestIdSchema,
   })
   .strict();
 
@@ -93,7 +95,7 @@ export const recentMatchesResponseSchema = z
   .object({
     player: playerProfileSchema,
     matches: z.array(recentMatchItemSchema),
-    request_id: z.string(),
+    request_id: requestIdSchema,
   })
   .strict();
 
@@ -110,7 +112,7 @@ export const matchDetailResponseSchema = z
     red_team: z.array(hydratedParticipantSchema).length(5),
     static_data_status: staticDataStatusSchema,
     scope_notice_code: z.literal("DATA_ONLY_NO_COACHING"),
-    request_id: z.string(),
+    request_id: requestIdSchema,
   })
   .strict();
 

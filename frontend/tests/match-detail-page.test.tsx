@@ -180,6 +180,18 @@ describe("MatchDetailClient", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("This player is not in the match data.");
   });
 
+  it("does not show support details for a sanitized request ID on local player validation", async () => {
+    vi.mocked(getMatchDetail).mockResolvedValue({
+      ...matchDetailFixture,
+      selected_puuid: "different-puuid",
+      request_id: null,
+    });
+    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("This player is not in the match data.");
+    expect(screen.queryByText("Support details")).not.toBeInTheDocument();
+  });
+
   it("aborts a stale request before it can replace the newer match", async () => {
     let firstSignal: AbortSignal | undefined;
     vi.mocked(getMatchDetail)

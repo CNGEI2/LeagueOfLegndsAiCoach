@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiClientError, getMatchDetail, resolvePlayer } from "@/api/client";
+import { getMatchDetail, resolvePlayer } from "@/api/client";
 
 function validParticipant(puuid: string, teamId: number, championId: number) {
   return {
@@ -35,7 +35,7 @@ function validParticipant(puuid: string, teamId: number, championId: number) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("API client", () => {
-  it("accepts a normalized player response", async () => {
+  it("clears a PUUID-shaped request ID from a normalized player response", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -60,20 +60,17 @@ describe("API client", () => {
                 code: null,
               },
             },
-            request_id: "request-1",
+            request_id: "123e4567-e89b-12d3-a456-426614174000",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
       ),
     );
 
-    const result = await resolvePlayer({
-      platform: "NA1",
-      gameName: "PlayerName",
-      tagLine: "1115",
-    });
+    const result = await resolvePlayer({ platform: "NA1", gameName: "PlayerName", tagLine: "1115" });
 
     expect(result.player.tag_line).toBe("1115");
+    expect(result.request_id).toBeNull();
   });
 
   it("rejects a successful response that violates the runtime schema", async () => {
@@ -126,7 +123,7 @@ describe("API client", () => {
     ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
   });
 
-  it("preserves a safe backend code and request ID", async () => {
+  it("preserves a safe backend code and 32-hex request ID", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -137,16 +134,62 @@ describe("API client", () => {
               message: "Riot API rate limit reached.",
               params: { retry_after_seconds: 12 },
               retryable: true,
-              request_id: "request-2",
+              request_id: "a3f4c1d2e5b67890a1b2c3d4e5f60718",
             },
           }),
-          { status: 429, headers: { "X-Request-ID": "request-2" } },
+          {
+            status: 429,
+            headers: { "X-Request-ID": "a3f4c1d2e5b67890a1b2c3d4e5f60718" },
+          },
         ),
       ),
     );
 
-    await expect(
-      resolvePlayer({ platform: "NA1", gameName: "PlayerName", tagLine: "1115" }),
-    ).rejects.toBeInstanceOf(ApiClientError);
+    await expect(resolvePlayer({ platform: "NA1", gameName: "PlayerName", tagLine: "1115" })).rejects.toMatchObject({
+      code: "RIOT_RATE_LIMITED",
+      requestId: "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+    });
+  });
+
+  it("drops a PUUID-shaped request ID from a parsed error envelope", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "RIOT_RATE_LIMITED",
+              message: "Riot API rate limit reached.",
+              params: { retry_after_seconds: 12 },
+              retryable: true,
+              request_id: "123e4567-e89b-12d3-a456-426614174000",
+            },
+          }),
+          { status: 429, headers: { "X-Request-ID": "123e4567-e89b-12d3-a456-426614174000" } },
+        ),
+      ),
+    );
+
+    await expect(resolvePlayer({ platform: "NA1", gameName: "PlayerName", tagLine: "1115" })).rejects.toMatchObject({
+      code: "RIOT_RATE_LIMITED",
+      requestId: null,
+    });
+  });
+
+  it("drops a PUUID-shaped request ID from an invalid response header", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ player: { puuid: 12 } }), {
+          status: 200,
+          headers: { "X-Request-ID": "123e4567-e89b-12d3-a456-426614174000" },
+        }),
+      ),
+    );
+
+    await expect(resolvePlayer({ platform: "NA1", gameName: "PlayerName", tagLine: "1115" })).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+      requestId: null,
+    });
   });
 });

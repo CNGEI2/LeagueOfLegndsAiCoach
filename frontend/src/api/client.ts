@@ -9,6 +9,11 @@ import {
 import type { Locale } from "@/i18n/locales";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const requestIdPattern = /^[0-9a-f]{32}$/;
+
+function safeRequestId(value: string | null): string | null {
+  return value !== null && requestIdPattern.test(value) ? value : null;
+}
 
 export class ApiClientError extends Error {
   constructor(
@@ -46,14 +51,14 @@ async function request<T>(
         "INVALID_API_RESPONSE",
         {},
         true,
-        response.headers.get("X-Request-ID"),
+        safeRequestId(response.headers.get("X-Request-ID")),
       );
     }
     throw new ApiClientError(
       parsed.data.error.code,
       parsed.data.error.params,
       parsed.data.error.retryable,
-      parsed.data.error.request_id,
+      safeRequestId(parsed.data.error.request_id),
     );
   }
 
@@ -63,7 +68,7 @@ async function request<T>(
       "INVALID_API_RESPONSE",
       {},
       true,
-      response.headers.get("X-Request-ID"),
+      safeRequestId(response.headers.get("X-Request-ID")),
     );
   }
   return parsed.data;
