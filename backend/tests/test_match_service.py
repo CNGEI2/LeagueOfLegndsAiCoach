@@ -52,6 +52,9 @@ class FakeRiotGateway:
         self.match_calls: list[str] = []
         self.active_calls = 0
         self.max_active_calls = 0
+        self.match_error: ApiError | None = None
+        self.match_started: asyncio.Event | None = None
+        self.match_release: asyncio.Event | None = None
 
     async def get_match_ids(self, *, platform: Platform, puuid: str, count: int) -> tuple[str, ...]:
         self.match_id_calls += 1
@@ -62,7 +65,13 @@ class FakeRiotGateway:
         self.active_calls += 1
         self.max_active_calls = max(self.max_active_calls, self.active_calls)
         try:
+            if self.match_started is not None:
+                self.match_started.set()
+            if self.match_release is not None:
+                await self.match_release.wait()
             await asyncio.sleep(0)
+            if self.match_error is not None:
+                raise self.match_error
             return self.matches[match_id]
         finally:
             self.active_calls -= 1
@@ -278,6 +287,113 @@ async def test_missing_match_fetches_never_exceed_configured_concurrency(
 
     assert [item.match_id for item in result.matches] == list(ids)
     assert deps.riot_gateway.max_active_calls == 4
+
+
+@pytest.mark.asyncio
+async def test_duplicate_missing_ids_keep_output_positions_but_fetch_and_cache_once(
+    match_service_dependencies: MatchServiceDependencies,
+) -> None:
+    deps = match_service_dependencies
+    deps.riot_gateway.match_ids = ("NA1_123456789", "NA1_123456789")
+
+    result = await make_service(deps).list_recent(
+        platform=Platform.NA1, puuid="selected-puuid", count=10, locale=Locale.EN_US
+    )
+
+    assert [item.match_id for item in result.matches] == ["NA1_123456789", "NA1_123456789"]
+    assert deps.riot_gateway.match_calls == ["NA1_123456789"]
+    assert len(deps.match_repository.puts) == 1
+
+
+@pytest.mark.asyncio
+async def test_overlapping_missing_match_requests_share_one_fetch_and_retry_after_error(
+    match_service_dependencies: MatchServiceDependencies,
+) -> None:
+    deps = match_service_dependencies
+    service = make_service(deps)
+    deps.riot_gateway.match_started = asyncio.Event()
+    deps.riot_gateway.match_release = asyncio.Event()
+    deps.riot_gateway.match_error = ApiError(
+        status_code=503,
+        code="RIOT_UNAVAILABLE",
+        message="Riot is temporarily unavailable.",
+        retryable=True,
+    )
+
+    first = asyncio.create_task(
+        service.get_detail(
+            platform=Platform.NA1,
+            match_id="NA1_123456789",
+            puuid="selected-puuid",
+            locale=Locale.EN_US,
+        )
+    )
+    await deps.riot_gateway.match_started.wait()
+    second = asyncio.create_task(
+        service.get_detail(
+            platform=Platform.NA1,
+            match_id="NA1_123456789",
+            puuid="selected-puuid",
+            locale=Locale.EN_US,
+        )
+    )
+    await asyncio.sleep(0)
+    deps.riot_gateway.match_release.set()
+
+    failures = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert [type(failure) for failure in failures] == [ApiError, ApiError]
+    assert [failure.code for failure in failures if isinstance(failure, ApiError)] == [
+        "RIOT_UNAVAILABLE",
+        "RIOT_UNAVAILABLE",
+    ]
+    assert deps.riot_gateway.match_calls == ["NA1_123456789"]
+
+    deps.riot_gateway.match_error = None
+    retry = await service.get_detail(
+        platform=Platform.NA1,
+        match_id="NA1_123456789",
+        puuid="selected-puuid",
+        locale=Locale.EN_US,
+    )
+
+    assert retry.match_id == "NA1_123456789"
+    assert deps.riot_gateway.match_calls == ["NA1_123456789", "NA1_123456789"]
+
+
+@pytest.mark.asyncio
+async def test_overlapping_missing_match_requests_receive_the_same_normalized_result(
+    match_service_dependencies: MatchServiceDependencies,
+) -> None:
+    deps = match_service_dependencies
+    service = make_service(deps)
+    deps.riot_gateway.match_started = asyncio.Event()
+    deps.riot_gateway.match_release = asyncio.Event()
+
+    first = asyncio.create_task(
+        service.get_detail(
+            platform=Platform.NA1,
+            match_id="NA1_123456789",
+            puuid="selected-puuid",
+            locale=Locale.EN_US,
+        )
+    )
+    await deps.riot_gateway.match_started.wait()
+    second = asyncio.create_task(
+        service.get_detail(
+            platform=Platform.NA1,
+            match_id="NA1_123456789",
+            puuid="selected-puuid",
+            locale=Locale.EN_US,
+        )
+    )
+    await asyncio.sleep(0)
+    deps.riot_gateway.match_release.set()
+
+    first_result, second_result = await asyncio.gather(first, second)
+
+    assert first_result == second_result
+    assert deps.riot_gateway.match_calls == ["NA1_123456789"]
 
 
 @pytest.mark.asyncio

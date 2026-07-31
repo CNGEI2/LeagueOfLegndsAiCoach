@@ -69,6 +69,7 @@ class MatchService:
         self._recent_cache_ttl_seconds = recent_cache_ttl_seconds
         self._match_retention_days = match_retention_days
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._inflight_loads: dict[tuple[Platform, str], asyncio.Task[MatchSnapshot]] = {}
         self._clock = clock or (lambda: datetime.now(UTC))
         self._logger = logger or logging.getLogger("lol_ai_coach.matches")
 
@@ -137,6 +138,15 @@ class MatchService:
         return match_ids
 
     async def _load_missing_match(self, platform: Platform, match_id: str) -> MatchSnapshot:
+        key = (platform, match_id)
+        task = self._inflight_loads.get(key)
+        if task is None:
+            task = asyncio.create_task(self._load_with_cache(platform, match_id))
+            self._inflight_loads[key] = task
+            task.add_done_callback(lambda completed: self._clear_inflight(key, completed))
+        return await asyncio.shield(task)
+
+    async def _load_with_cache(self, platform: Platform, match_id: str) -> MatchSnapshot:
         now = self._clock()
         retention_boundary = now - timedelta(days=self._match_retention_days)
         cached = await self._match_repository.get(
@@ -152,6 +162,12 @@ class MatchService:
         await self._match_repository.put(snapshot, fetched_at=now)
         await self._match_repository.delete_expired(before=retention_boundary)
         return snapshot
+
+    def _clear_inflight(
+        self, key: tuple[Platform, str], completed: asyncio.Task[MatchSnapshot]
+    ) -> None:
+        if self._inflight_loads.get(key) is completed:
+            del self._inflight_loads[key]
 
     async def _load_matches(
         self, platform: Platform, match_ids: tuple[str, ...]
