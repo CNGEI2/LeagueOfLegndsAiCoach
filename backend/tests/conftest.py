@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
+from app.core.dependencies import AppServices
 from app.main import create_app
 
 
@@ -22,6 +23,19 @@ class FakeDatabase:
         self.close_count += 1
 
 
+class FakePlayerService:
+    async def resolve(self, **kwargs: object) -> object:
+        raise AssertionError(f"player service should not be called by health endpoints: {kwargs}")
+
+    async def get_by_puuid(self, **kwargs: object) -> object:
+        raise AssertionError(f"player service should not be called by health endpoints: {kwargs}")
+
+
+@pytest.fixture
+def fake_services() -> AppServices:
+    return AppServices(player_service=FakePlayerService(), closers=())
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
@@ -38,14 +52,24 @@ def fake_database() -> FakeDatabase:
 
 
 @pytest.fixture
-def client(settings: Settings, fake_database: FakeDatabase) -> Generator[TestClient, None, None]:
-    with TestClient(create_app(settings=settings, database=fake_database)) as test_client:
+def client(
+    settings: Settings, fake_database: FakeDatabase, fake_services: AppServices
+) -> Generator[TestClient, None, None]:
+    with TestClient(
+        create_app(settings=settings, database=fake_database, services=fake_services)
+    ) as test_client:
         yield test_client
 
 
 @pytest.fixture
-def unavailable_client(settings: Settings) -> Generator[TestClient, None, None]:
+def unavailable_client(
+    settings: Settings, fake_services: AppServices
+) -> Generator[TestClient, None, None]:
     with TestClient(
-        create_app(settings=settings, database=FakeDatabase(should_fail=True))
+        create_app(
+            settings=settings,
+            database=FakeDatabase(should_fail=True),
+            services=fake_services,
+        )
     ) as test_client:
         yield test_client

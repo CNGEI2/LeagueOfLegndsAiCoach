@@ -15,6 +15,16 @@ class RiotGateway:
     def __init__(self, client: RiotHttpClient) -> None:
         self._client = client
 
+    async def get_account_by_puuid(self, *, platform: Platform, puuid: str) -> AccountDto:
+        host = routes_for(platform).regional_host
+        payload = await self._client.get_json(
+            host=host,
+            path=f"/riot/account/v1/accounts/by-puuid/{quote(puuid, safe='')}",
+            params=None,
+            not_found_code="PLAYER_NOT_FOUND",
+        )
+        return validate_riot_model(AccountDto, payload)
+
     async def get_account_by_riot_id(
         self, *, platform: Platform, game_name: str, tag_line: str
     ) -> AccountDto:

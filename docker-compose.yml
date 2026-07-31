@@ -21,6 +21,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql+asyncpg://lol_ai_coach:lol_ai_coach@db:5432/lol_ai_coach}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
+      RIOT_API_KEY: ${RIOT_API_KEY:-}
     ports:
       - "8000:8000"
     depends_on:

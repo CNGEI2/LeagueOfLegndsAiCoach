@@ -9,6 +9,28 @@ from tests.fixtures.riot_payloads import MATCH_PAYLOAD
 
 
 @pytest.mark.asyncio
+async def test_gateway_gets_account_by_puuid_on_regional_route() -> None:
+    """Direct player links resolve accounts through Riot's regional route."""
+    seen_url = ""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal seen_url
+        seen_url = str(request.url)
+        return httpx2.Response(
+            200,
+            json={"puuid": "puuid-1", "gameName": "PlayerName", "tagLine": "1115"},
+        )
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
+        gateway = RiotGateway(RiotHttpClient(api_key="RGAPI-fake", client=raw_client))
+        account = await gateway.get_account_by_puuid(platform=Platform.NA1, puuid="puuid-1")
+
+    assert account.game_name == "PlayerName"
+    assert seen_url.startswith("https://americas.api.riotgames.com/")
+    assert seen_url.endswith("/riot/account/v1/accounts/by-puuid/puuid-1")
+
+
+@pytest.mark.asyncio
 async def test_gateway_uses_independent_tag_line_and_regional_account_route() -> None:
     """A tag line must remain distinct from the game name and use the regional host."""
     seen_url = ""
