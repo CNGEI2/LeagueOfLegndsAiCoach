@@ -1,4 +1,4 @@
-.PHONY: install dev-backend dev-frontend test lint typecheck verify docker-up docker-down
+.PHONY: install dev-backend dev-frontend test lint typecheck verify verify-postgres docker-up docker-down
 
 install:
 	python3 -m venv backend/.venv
@@ -13,7 +13,7 @@ dev-frontend:
 	cd frontend && pnpm dev
 
 test:
-	cd backend && .venv/bin/pytest -v
+	cd backend && .venv/bin/pytest -m "not integration" -v
 	cd frontend && pnpm test
 
 lint:
@@ -27,6 +27,11 @@ typecheck:
 
 verify: test lint typecheck
 	cd frontend && pnpm build
+
+verify-postgres:
+	test -n "$$TEST_DATABASE_URL"
+	cd backend; DATABASE_URL=$$TEST_DATABASE_URL .venv/bin/alembic upgrade head
+	cd backend; .venv/bin/pytest -m integration -v
 
 docker-up:
 	docker compose up --build

@@ -7,6 +7,22 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: lol_ai_coach_test
+          POSTGRES_USER: lol_ai_coach
+          POSTGRES_PASSWORD: lol_ai_coach
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lol_ai_coach -d lol_ai_coach_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://lol_ai_coach:lol_ai_coach@localhost:5432/lol_ai_coach_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,8 +31,9 @@ jobs:
           cache: pip
           cache-dependency-path: backend/pyproject.toml
       - run: python -m pip install -e 'backend[dev]'
-      - run: pytest -v
+      - run: pytest -m "not integration" -v
         working-directory: backend
+      - run: make verify-postgres
       - run: ruff check .
         working-directory: backend
       - run: ruff format --check .
