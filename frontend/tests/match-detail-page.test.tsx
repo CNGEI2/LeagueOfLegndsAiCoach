@@ -108,6 +108,43 @@ describe("MatchDetailClient", () => {
     expect(screen.getAllByAltText("Item: Doran's Blade")).not.toHaveLength(0);
   });
 
+  it("keeps internal participant IDs private and uses stable team-local labels", async () => {
+    vi.mocked(getMatchDetail).mockResolvedValue(matchDetailFixture);
+    const { container } = render(
+      <MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />,
+    );
+
+    expect(await screen.findByRole("heading", { name: /match details/i })).toBeVisible();
+    for (const internalId of [
+      "blue-2",
+      "blue-3",
+      "blue-4",
+      "blue-5",
+      "red-1",
+      "red-2",
+      "red-3",
+      "red-4",
+      "red-5",
+    ]) {
+      expect(container).not.toHaveTextContent(internalId);
+    }
+    expect(screen.getAllByText(/^Player [1-5]$/)).toHaveLength(9);
+    expect(screen.getAllByText("Player 1")).toHaveLength(1);
+    for (const number of [2, 3, 4, 5]) {
+      expect(screen.getAllByText(`Player ${number}`)).toHaveLength(2);
+    }
+    expect(screen.getByText("Selected player").closest("tr")).toHaveAttribute("aria-current", "true");
+  });
+
+  it("localizes neutral participant labels in Chinese", async () => {
+    vi.mocked(getMatchDetail).mockResolvedValue(matchDetailFixture);
+    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+
+    expect(await screen.findByRole("heading", { name: "对局详情" })).toBeVisible();
+    expect(screen.getAllByText(/^玩家 [1-5]$/)).toHaveLength(9);
+    expect(screen.getByText("已选择玩家").closest("tr")).toHaveAttribute("aria-current", "true");
+  });
+
   it("keeps numeric data visible when static data is unavailable", async () => {
     vi.mocked(getMatchDetail).mockResolvedValue(degradedMatchDetailFixture);
     render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);

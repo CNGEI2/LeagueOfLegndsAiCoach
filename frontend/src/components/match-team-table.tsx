@@ -47,12 +47,16 @@ export function MatchTeamTable({
           </tr>
         </thead>
         <tbody>
-          {participants.map((participant) => {
+          {participants.map((participant, index) => {
             const selected = participant.puuid === selectedPuuid;
             return (
               <tr key={participant.puuid} data-selected={selected || undefined} aria-current={selected ? "true" : undefined}>
                 <th scope="row">
-                  {selected ? <span className="selected-player-label">{messages.selectedPlayer}</span> : participant.puuid}
+                  {selected ? (
+                    <span className="selected-player-label">{messages.selectedPlayer}</span>
+                  ) : (
+                    fill(messages.participantLabel, { number: index + 1 })
+                  )}
                 </th>
                 <td>
                   {staticDataAvailable && participant.champion ? (

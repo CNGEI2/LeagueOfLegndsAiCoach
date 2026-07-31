@@ -58,6 +58,7 @@ export const zhCN: Messages = {
   unknownItem: "未知装备",
   unknownStatistic: "暂无数据",
   selectedPlayer: "已选择玩家",
+  participantLabel: "玩家 {number}",
   playerIdentity: "玩家",
   role: "位置",
   gold: "金币",

@@ -57,6 +57,7 @@ export const enUS = {
   unknownItem: "Unknown item",
   unknownStatistic: "Unavailable",
   selectedPlayer: "Selected player",
+  participantLabel: "Player {number}",
   playerIdentity: "Player",
   role: "Role",
   gold: "Gold",
