@@ -34,6 +34,46 @@ def test_match_normalization_rejects_metadata_for_another_platform_identity() ->
     assert caught.value.code == "RIOT_INVALID_RESPONSE"
 
 
+def test_match_normalization_rejects_zero_participants() -> None:
+    """An empty upstream match cannot become a valid public snapshot."""
+    payload = copy.deepcopy(MATCH_PAYLOAD)
+    info = payload["info"]
+    metadata = payload["metadata"]
+    assert isinstance(info, dict)
+    assert isinstance(metadata, dict)
+    info["participants"] = []
+    metadata["participants"] = []
+
+    with pytest.raises(ApiError) as caught:
+        normalize_match(MatchDto.model_validate(payload), Platform.NA1)
+
+    assert caught.value.code == "RIOT_INVALID_RESPONSE"
+
+
+def test_match_normalization_rejects_metadata_roster_mismatch() -> None:
+    """Metadata must describe the same participant identities as the match info."""
+    payload = copy.deepcopy(MATCH_PAYLOAD)
+    metadata = payload["metadata"]
+    assert isinstance(metadata, dict)
+    metadata["participants"] = [
+        "unexpected-puuid",
+        "puuid-2",
+        "puuid-3",
+        "puuid-4",
+        "puuid-5",
+        "puuid-6",
+        "puuid-7",
+        "puuid-8",
+        "puuid-9",
+        "puuid-10",
+    ]
+
+    with pytest.raises(ApiError) as caught:
+        normalize_match(MatchDto.model_validate(payload), Platform.NA1)
+
+    assert caught.value.code == "RIOT_INVALID_RESPONSE"
+
+
 def test_nonstandard_match_is_normalized_but_not_eligible_for_standard_detail() -> None:
     """Recent-match discovery keeps valid special modes without exposing a broken 5v5 detail."""
     payload = copy.deepcopy(MATCH_PAYLOAD)
@@ -49,6 +89,23 @@ def test_nonstandard_match_is_normalized_but_not_eligible_for_standard_detail() 
     snapshot = normalize_match(MatchDto.model_validate(payload), Platform.NA1)
 
     assert len(snapshot.participants) == 3
+    assert supports_standard_detail(snapshot) is False
+
+
+def test_ten_player_match_with_nonstandard_team_split_has_no_standard_detail() -> None:
+    """Ten participants alone are insufficient when team 100 and 200 are not five each."""
+    payload = copy.deepcopy(MATCH_PAYLOAD)
+    info = payload["info"]
+    assert isinstance(info, dict)
+    players = info["participants"]
+    assert isinstance(players, list)
+    sixth_player = players[5]
+    assert isinstance(sixth_player, dict)
+    sixth_player["teamId"] = 100
+
+    snapshot = normalize_match(MatchDto.model_validate(payload), Platform.NA1)
+
+    assert len(snapshot.participants) == 10
     assert supports_standard_detail(snapshot) is False
 
 
