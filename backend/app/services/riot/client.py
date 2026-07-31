@@ -46,6 +46,8 @@ class RiotHttpClient:
         jitter: Callable[[float], float] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
+        connect_timeout_seconds: float = 2.0,
+        read_timeout_seconds: float = 5.0,
         total_timeout_seconds: float = 10.0,
         retry_max_delay_seconds: float = 2.0,
     ) -> None:
@@ -55,6 +57,11 @@ class RiotHttpClient:
         self._jitter = jitter or (lambda maximum: maximum)
         self._monotonic = monotonic
         self._logger = logger or logging.getLogger("lol_ai_coach.riot")
+        self._request_timeout = httpx2.Timeout(
+            read_timeout_seconds,
+            connect=connect_timeout_seconds,
+            read=read_timeout_seconds,
+        )
         self._total_timeout_seconds = total_timeout_seconds
         self._retry_max_delay_seconds = retry_max_delay_seconds
 
@@ -79,6 +86,7 @@ class RiotHttpClient:
                             f"https://{host}{path}",
                             params=params,
                             headers={"X-Riot-Token": self._api_key},
+                            timeout=self._request_timeout,
                         )
                     except httpx2.RequestError:
                         if attempt == 0:
@@ -101,6 +109,7 @@ class RiotHttpClient:
                             attempt == 0
                             and retry_after is not None
                             and retry_after <= self._retry_max_delay_seconds
+                            and retry_after <= self._remaining_budget(started_at)
                         ):
                             retries = 1
                             await self._sleep(retry_after)
@@ -147,6 +156,9 @@ class RiotHttpClient:
         return min(
             max(0.0, self._jitter(self._retry_max_delay_seconds)), self._retry_max_delay_seconds
         )
+
+    def _remaining_budget(self, started_at: float) -> float:
+        return max(0.0, self._total_timeout_seconds - (self._monotonic() - started_at))
 
     @staticmethod
     def _retry_after(response: httpx2.Response) -> int | None:

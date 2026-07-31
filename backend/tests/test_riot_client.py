@@ -32,6 +32,34 @@ async def test_riot_client_sends_server_only_token() -> None:
 
 
 @pytest.mark.asyncio
+async def test_riot_client_enforces_configured_connect_and_read_timeouts() -> None:
+    """Injected clients must receive the Phase 2 per-operation timeout policy."""
+    seen_timeout: dict[str, float | None] = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal seen_timeout
+        seen_timeout = request.extensions["timeout"]
+        return httpx2.Response(200, json={"ok": True})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as transport_client:
+        body = await RiotHttpClient(
+            api_key="RGAPI-fake",
+            client=transport_client,
+            connect_timeout_seconds=0.25,
+            read_timeout_seconds=0.75,
+        ).get_json(
+            host="americas.api.riotgames.com",
+            path="/test",
+            params=None,
+            not_found_code="PLAYER_NOT_FOUND",
+        )
+
+    assert body == {"ok": True}
+    assert seen_timeout["connect"] == 0.25
+    assert seen_timeout["read"] == 0.75
+
+
+@pytest.mark.asyncio
 async def test_riot_client_maps_rate_limit_without_unbounded_sleep() -> None:
     """A long Retry-After must be returned to the caller, not slept indefinitely."""
 
@@ -87,6 +115,43 @@ async def test_riot_client_retries_short_rate_limit_once() -> None:
     assert body == {"ok": True}
     assert requests == 2
     assert sleeps == [1]
+
+
+@pytest.mark.asyncio
+async def test_riot_client_does_not_sleep_past_total_budget_for_rate_limit() -> None:
+    """A retryable 429 still cannot consume time after the aggregate deadline."""
+    requests = 0
+    sleeps: list[float] = []
+    clock_values = iter([0.0, 1.5, 1.5])
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal requests
+        requests += 1
+        return httpx2.Response(429, headers={"Retry-After": "1"}, json={})
+
+    async def record_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as transport_client:
+        with pytest.raises(ApiError) as caught:
+            await RiotHttpClient(
+                api_key="RGAPI-fake",
+                client=transport_client,
+                sleep=record_sleep,
+                monotonic=lambda: next(clock_values),
+                total_timeout_seconds=2.0,
+                retry_max_delay_seconds=2.0,
+            ).get_json(
+                host="americas.api.riotgames.com",
+                path="/test",
+                params=None,
+                not_found_code="PLAYER_NOT_FOUND",
+            )
+
+    assert caught.value.code == "RIOT_RATE_LIMITED"
+    assert caught.value.params == {"retry_after_seconds": 1}
+    assert requests == 1
+    assert sleeps == []
 
 
 @pytest.mark.asyncio

@@ -26,7 +26,7 @@ class SummonerDto(RiotDto):
 
 class MatchMetadataDto(RiotDto):
     match_id: str = Field(alias="matchId")
-    participants: tuple[str, ...] = ()
+    participants: tuple[str, ...]
 
 
 class ParticipantDto(RiotDto):

@@ -140,3 +140,22 @@ async def test_gateway_rejects_match_without_critical_metadata_match_id() -> Non
 
     assert caught.value.status_code == 502
     assert caught.value.code == "RIOT_INVALID_RESPONSE"
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_match_without_critical_metadata_participants() -> None:
+    """A match identity roster is required even when the match ID exists."""
+    invalid_payload = dict(MATCH_PAYLOAD)
+    invalid_payload["metadata"] = {"matchId": "NA1_123"}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=invalid_payload)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
+        with pytest.raises(ApiError) as caught:
+            await RiotGateway(RiotHttpClient(api_key="RGAPI-fake", client=raw_client)).get_match(
+                platform=Platform.NA1, match_id="NA1_123"
+            )
+
+    assert caught.value.status_code == 502
+    assert caught.value.code == "RIOT_INVALID_RESPONSE"
