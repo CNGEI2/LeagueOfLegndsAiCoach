@@ -1,4 +1,4 @@
-.PHONY: install dev-backend dev-frontend test lint typecheck verify verify-postgres docker-up docker-down
+.PHONY: install dev-backend dev-frontend test lint typecheck verify verify-postgres smoke-riot docker-up docker-down
 
 install:
 	python3 -m venv backend/.venv
@@ -32,6 +32,9 @@ verify-postgres:
 	test -n "$$TEST_DATABASE_URL"
 	cd backend; DATABASE_URL=$$TEST_DATABASE_URL .venv/bin/alembic upgrade head
 	cd backend; .venv/bin/pytest -m integration -v
+
+smoke-riot:
+	PYTHONPATH=backend backend/.venv/bin/python scripts/smoke_riot.py
 
 docker-up:
 	docker compose up --build

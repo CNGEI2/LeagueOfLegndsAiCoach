@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+git -C "$repo_dir" diff --check
+
 cd "$repo_dir/backend"
 .venv/bin/pytest -m "not integration" -v
 .venv/bin/ruff check .

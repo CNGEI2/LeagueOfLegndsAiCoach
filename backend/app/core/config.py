@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     player_cache_ttl_seconds: int = 900
     recent_matches_cache_ttl_seconds: int = 120
     match_retention_days: int = 30
+    riot_smoke_game_name: str = ""
+    riot_smoke_tag_line: str = ""
+    riot_smoke_platform: str = "NA1"
+    smoke_api_base_url: str = "http://localhost:8000"
 
     model_config = SettingsConfigDict(env_file=ROOT_ENV_FILE, extra="ignore")
 

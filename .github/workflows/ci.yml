@@ -40,6 +40,7 @@ jobs:
         working-directory: backend
       - run: mypy
         working-directory: backend
+      # Live smoke needs an ignored local Riot key and smoke identity; it is intentionally excluded.
 
   frontend:
     runs-on: ubuntu-latest
