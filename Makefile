@@ -26,6 +26,7 @@ typecheck:
 	cd frontend && pnpm typecheck
 
 verify: test lint typecheck
+	git diff --check
 	cd frontend && pnpm build
 
 verify-postgres:

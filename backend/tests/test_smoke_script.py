@@ -122,6 +122,37 @@ def test_smoke_requires_nonempty_identity_and_configured_riot_key(
     assert caught.value.request_id is None
 
 
+def test_smoke_rejects_puuid_like_error_request_id_without_losing_safe_code() -> None:
+    """Relaxing request-ID validation would print an attacker-controlled identifier."""
+    sensitive_puuid = "private-puuid-1"
+    client = FakeSmokeClient(
+        responses=[
+            FakeResponse(
+                {
+                    "error": {
+                        "code": "PLAYER_NOT_FOUND",
+                        "request_id": sensitive_puuid,
+                    }
+                },
+                raise_error=RuntimeError("request failed"),
+            )
+        ]
+    )
+
+    with pytest.raises(SmokeFailure) as caught:
+        run_smoke(
+            client=client,
+            api_base_url="http://localhost:8000",
+            game_name="Secret Player",
+            tag_line="1115",
+            platform="NA1",
+        )
+
+    assert caught.value.code == "PLAYER_NOT_FOUND"
+    assert caught.value.request_id is None
+    assert sensitive_puuid not in str(caught.value)
+
+
 @pytest.mark.parametrize(
     ("responses", "expected_code", "expected_request_id"),
     [
@@ -131,7 +162,7 @@ def test_smoke_requires_nonempty_identity_and_configured_riot_key(
                     {
                         "error": {
                             "code": "PLAYER_NOT_FOUND",
-                            "request_id": "request-player",
+                            "request_id": "0123456789abcdef0123456789abcdef",
                             "message": "Secret Player RGAPI-private-key",
                         }
                     },
@@ -139,7 +170,7 @@ def test_smoke_requires_nonempty_identity_and_configured_riot_key(
                 )
             ],
             "PLAYER_NOT_FOUND",
-            "request-player",
+            "0123456789abcdef0123456789abcdef",
         ),
         (
             [
@@ -169,7 +200,7 @@ def test_smoke_requires_nonempty_identity_and_configured_riot_key(
                     {
                         "error": {
                             "code": "MATCH_NOT_FOUND",
-                            "request_id": "request-match",
+                            "request_id": "fedcba9876543210fedcba9876543210",
                             "message": "NA1_123456789",
                         }
                     },
@@ -177,7 +208,7 @@ def test_smoke_requires_nonempty_identity_and_configured_riot_key(
                 ),
             ],
             "MATCH_NOT_FOUND",
-            "request-match",
+            "fedcba9876543210fedcba9876543210",
         ),
         (
             [FakeResponse("RGAPI-private-key http://localhost:8000/private-puuid")],

@@ -8,7 +8,7 @@ from typing import Protocol
 from urllib.parse import quote
 
 _SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{1,79}$")
-_SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_SAFE_REQUEST_ID = re.compile(r"^[0-9a-f]{32}$")
 
 
 class SmokeResponse(Protocol):
