@@ -114,13 +114,13 @@ async def test_gateway_validates_nested_match_data_and_ignores_unknown_fields() 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
         match = await RiotGateway(
             RiotHttpClient(api_key="RGAPI-fake", client=raw_client)
-        ).get_match(platform=Platform.NA1, match_id="NA1_123")
+        ).get_match(platform=Platform.NA1, match_id="NA1_123456789")
 
     participant = match.info.participants[0]
-    assert match.metadata.match_id == "NA1_123"
+    assert match.metadata.match_id == "NA1_123456789"
     assert match.info.game_creation == 1720000000000
     assert participant.team_position == "MIDDLE"
-    assert participant.item0 is None
+    assert participant.item3 is None
 
 
 @pytest.mark.asyncio
