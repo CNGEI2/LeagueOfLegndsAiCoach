@@ -2,6 +2,36 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiClientError, getMatchDetail, resolvePlayer } from "@/api/client";
 
+function validParticipant(puuid: string, teamId: number, championId: number) {
+  return {
+    puuid,
+    team_id: teamId,
+    champion_id: championId,
+    role: "MIDDLE",
+    won: teamId === 100,
+    kills: 7,
+    deaths: 3,
+    assists: 8,
+    cs: 180,
+    gold_earned: 12000,
+    damage_to_champions: 20000,
+    vision_score: 20,
+    item_ids: [1055],
+    champion: {
+      entity_id: championId,
+      name: `Champion ${championId}`,
+      image_url: `https://cdn.example/champions/${championId}.png`,
+    },
+    items: [
+      {
+        entity_id: 1055,
+        name: "Doran's Blade",
+        image_url: "https://cdn.example/items/1055.png",
+      },
+    ],
+  };
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("API client", () => {
@@ -75,8 +105,12 @@ describe("API client", () => {
             duration_seconds: 1200,
             game_version: "16.15.1",
             selected_puuid: "puuid-1",
-            blue_team: [],
-            red_team: [],
+            blue_team: Array.from({ length: 5 }, (_, index) =>
+              validParticipant(`blue-${index}`, 100, index + 1),
+            ),
+            red_team: Array.from({ length: 5 }, (_, index) =>
+              validParticipant(`red-${index}`, 200, index + 6),
+            ),
             static_data_status: { available: true, version: "16.15.1", code: null },
             scope_notice_code: "DATA_ONLY_NO_COACHING",
             request_id: "request-1",

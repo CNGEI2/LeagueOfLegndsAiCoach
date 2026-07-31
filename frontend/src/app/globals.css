@@ -191,6 +191,14 @@ footer {
   margin-top: 0.75rem;
 }
 
+.match-detail-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 0.9rem;
+}
+
 .static-data-warning {
   border-color: #89713a;
   color: #f3da9d;

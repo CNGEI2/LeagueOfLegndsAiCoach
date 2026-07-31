@@ -73,6 +73,21 @@ describe("RecentMatchCard", () => {
     expect(screen.getByText("CS: 201")).toBeVisible();
   });
 
+  it("marks the match-detail navigation as a dedicated 44px touch action", () => {
+    render(
+      <RecentMatchCard
+        locale="en-US"
+        puuid="puuid-1"
+        match={baseMatch}
+        messages={getMessages("en-US")}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "View match details" })).toHaveClass(
+      "match-detail-link",
+    );
+  });
+
   it("keeps numeric fallbacks and typed unavailable statistics visible without static assets", () => {
     render(
       <RecentMatchCard
