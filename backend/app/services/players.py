@@ -2,9 +2,9 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
-from unicodedata import normalize
 
 from app.core.logging import log_safe_operation
+from app.core.normalization import lookup_key
 from app.core.routing import Platform
 from app.repositories.players import PlayerRepository
 from app.schemas.domain import PlayerProfile, PlayerView
@@ -30,11 +30,6 @@ class PlayerResolver(Protocol):
     async def resolve(self, *, platform: Platform, game_name: str, tag_line: str) -> PlayerView: ...
 
     async def get_by_puuid(self, *, platform: Platform, puuid: str) -> PlayerView: ...
-
-
-def lookup_key(value: str) -> str:
-    """Normalize user lookup input without changing Riot's display values."""
-    return normalize("NFKC", value.strip()).casefold()
 
 
 class PlayerService:

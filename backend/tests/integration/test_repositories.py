@@ -74,6 +74,31 @@ async def test_player_repository_respects_fresh_after(session_factory) -> None:
 
 
 @pytest.mark.asyncio
+async def test_player_repository_upsert_uses_trimmed_nfkc_lookup_keys(session_factory) -> None:
+    """Canonical display identifiers must round-trip through the service's cache key contract."""
+    repository = SqlPlayerRepository(session_factory)
+    profile = PlayerProfile(
+        puuid="compatibility-puuid",
+        game_name="  Ｐｌａｙｅｒ  ",
+        tag_line="  ＮＡ１  ",
+        platform=Platform.NA1,
+        summoner_level=50,
+        profile_icon_id=29,
+    )
+    fetched_at = datetime.now(UTC)
+    await repository.upsert(profile, fetched_at=fetched_at)
+
+    cached = await repository.get_by_riot_id(
+        platform=Platform.NA1,
+        game_name_key="player",
+        tag_line_key="na1",
+        fresh_after=fetched_at - timedelta(seconds=1),
+    )
+
+    assert cached == profile
+
+
+@pytest.mark.asyncio
 async def test_player_repository_enforces_unique_puuid(session_factory) -> None:
     fetched_at = datetime.now(UTC)
     first = PlayerRow(

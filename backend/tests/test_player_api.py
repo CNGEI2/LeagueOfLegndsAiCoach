@@ -218,3 +218,40 @@ def test_lifespan_closes_database_when_service_shutdown_fails(settings: Settings
     assert order == ["services", "database"]
     assert closer.close_count == 1
     assert database.close_count == 1
+
+
+def test_lifespan_attempts_all_service_closers_after_a_close_failure(settings: Settings) -> None:
+    """Every owned HTTP client must be closed even when an earlier client close fails."""
+    order: list[str] = []
+
+    class OrderedDatabase(FakeDatabase):
+        async def close(self) -> None:
+            order.append("database")
+            await super().close()
+
+    class FailingCloser(FakeCloser):
+        async def aclose(self) -> None:
+            order.append("first")
+            await super().aclose()
+            raise RuntimeError("first close failed")
+
+    class SecondCloser(FakeCloser):
+        async def aclose(self) -> None:
+            order.append("second")
+            await super().aclose()
+
+    database = OrderedDatabase()
+    first = FailingCloser()
+    second = SecondCloser()
+    services = AppServices(player_service=FakePlayerService(), closers=(first, second))
+
+    with (
+        pytest.raises(RuntimeError, match="first close failed"),
+        TestClient(create_app(settings=settings, database=database, services=services)),
+    ):
+        pass
+
+    assert order == ["first", "second", "database"]
+    assert first.close_count == 1
+    assert second.close_count == 1
+    assert database.close_count == 1

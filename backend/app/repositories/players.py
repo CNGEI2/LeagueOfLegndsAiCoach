@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.normalization import lookup_key
 from app.core.routing import Platform
 from app.models.player import PlayerRow
 from app.schemas.domain import PlayerProfile
@@ -67,8 +68,8 @@ class SqlPlayerRepository:
             "platform": profile.platform.value,
             "game_name": profile.game_name,
             "tag_line": profile.tag_line,
-            "game_name_key": profile.game_name.casefold(),
-            "tag_line_key": profile.tag_line.casefold(),
+            "game_name_key": lookup_key(profile.game_name),
+            "tag_line_key": lookup_key(profile.tag_line),
             "summoner_level": profile.summoner_level,
             "profile_icon_id": profile.profile_icon_id,
             "fetched_at": fetched_at,

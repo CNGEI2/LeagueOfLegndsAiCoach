@@ -24,8 +24,15 @@ class AppServices:
     closers: tuple[AsyncCloser, ...]
 
     async def close(self) -> None:
+        first_error: BaseException | None = None
         for closer in self.closers:
-            await closer.aclose()
+            try:
+                await closer.aclose()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
 
 def build_services(*, settings: Settings, database: Database) -> AppServices:
