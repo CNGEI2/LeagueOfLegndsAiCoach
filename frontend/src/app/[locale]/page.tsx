@@ -24,7 +24,7 @@ export default async function HomePage({
         <p className="eyebrow">{messages.postGameReview}</p>
         <h1>{messages.headline}</h1>
         <p>{messages.description}</p>
-        <RiotSearchForm messages={messages} />
+        <RiotSearchForm locale={locale} messages={messages} />
       </section>
       <footer>{messages.disclaimer}</footer>
     </main>
