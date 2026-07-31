@@ -89,7 +89,7 @@ export function RecentMatchCard({
       <div className="match-slip-meta">
         <p className="utility-data">{messages.matchId}: {match.match_id}</p>
         {match.detail_supported ? (
-          <Link href={link}>{messages.matchDetails}</Link>
+          <Link href={link}>{messages.matchDetailsLink}</Link>
         ) : (
           <p className="match-unavailable">{detailUnavailableMessage(match, messages)}</p>
         )}

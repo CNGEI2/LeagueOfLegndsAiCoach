@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiClientError, resolvePlayer } from "@/api/client";
+import { ApiClientError, getMatchDetail, resolvePlayer } from "@/api/client";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -59,6 +59,36 @@ describe("API client", () => {
 
     await expect(
       resolvePlayer({ platform: "NA1", gameName: "PlayerName", tagLine: "1115" }),
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+  });
+
+  it("rejects match detail responses with uncontracted fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            match_id: "NA1_1",
+            platform: "NA1",
+            queue_id: 420,
+            started_at: "2026-07-30T12:00:00Z",
+            duration_seconds: 1200,
+            game_version: "16.15.1",
+            selected_puuid: "puuid-1",
+            blue_team: [],
+            red_team: [],
+            static_data_status: { available: true, version: "16.15.1", code: null },
+            scope_notice_code: "DATA_ONLY_NO_COACHING",
+            request_id: "request-1",
+            secretly_invented_coaching_score: 99,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      getMatchDetail({ matchId: "NA1_1", puuid: "puuid-1", platform: "NA1", locale: "en-US" }),
     ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
   });
 

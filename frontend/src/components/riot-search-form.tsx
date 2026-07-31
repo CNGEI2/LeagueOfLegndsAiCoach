@@ -24,7 +24,10 @@ function errorMessage(error: ApiClientError | null, messages: Messages) {
   }
   if (error.code === "RIOT_RATE_LIMITED") {
     const retryAfter = error.params.retry_after_seconds;
-    const seconds = typeof retryAfter === "number" ? retryAfter : "a few";
+    if (typeof retryAfter !== "number" || !Number.isFinite(retryAfter) || retryAfter < 0) {
+      return messages.rateLimitedWithoutDelay;
+    }
+    const seconds = retryAfter;
     return fill(messages.rateLimited, { seconds });
   }
   return messages.searchFailed;

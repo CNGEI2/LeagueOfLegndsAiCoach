@@ -1,0 +1,160 @@
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { getMatchDetailMock } = vi.hoisted(() => ({ getMatchDetailMock: vi.fn() }));
+
+vi.mock("@/api/client", () => ({
+  getMatchDetail: getMatchDetailMock,
+  ApiClientError: class ApiClientError extends Error {
+    constructor(
+      readonly code: string,
+      readonly params: Record<string, unknown>,
+      readonly retryable: boolean,
+      readonly requestId: string | null,
+    ) {
+      super(code);
+    }
+  },
+}));
+
+import { ApiClientError, getMatchDetail } from "@/api/client";
+import type { MatchDetailResponse } from "@/api/schemas";
+import { MatchDetailClient } from "@/components/match-detail-client";
+
+function participant(puuid: string, teamId: number, championId: number) {
+  return {
+    puuid,
+    team_id: teamId,
+    champion_id: championId,
+    role: "MIDDLE",
+    won: teamId === 100,
+    kills: 7,
+    deaths: 3,
+    assists: 8,
+    cs: 199,
+    gold_earned: 12000,
+    damage_to_champions: 18000,
+    vision_score: 20,
+    item_ids: [1055, 2003],
+    champion: {
+      entity_id: championId,
+      name: championId === 103 ? "Ahri" : `Champion ${championId}`,
+      image_url: `https://cdn.example/champions/${championId}.png`,
+    },
+    items: [
+      { entity_id: 1055, name: "Doran's Blade", image_url: "https://cdn.example/items/1055.png" },
+      { entity_id: 2003, name: "Health Potion", image_url: "https://cdn.example/items/2003.png" },
+    ],
+  };
+}
+
+const matchDetailFixture: MatchDetailResponse = {
+  match_id: "NA1_123456789",
+  platform: "NA1",
+  queue_id: 420,
+  started_at: "2026-07-30T12:00:00Z",
+  duration_seconds: 1800,
+  game_version: "16.15.1",
+  selected_puuid: "selected-puuid",
+  blue_team: [
+    participant("selected-puuid", 100, 103),
+    participant("blue-2", 100, 2),
+    participant("blue-3", 100, 3),
+    participant("blue-4", 100, 4),
+    participant("blue-5", 100, 5),
+  ],
+  red_team: [
+    participant("red-1", 200, 6),
+    participant("red-2", 200, 7),
+    participant("red-3", 200, 8),
+    participant("red-4", 200, 9),
+    participant("red-5", 200, 10),
+  ],
+  static_data_status: { available: true, version: "16.15.1", code: null },
+  scope_notice_code: "DATA_ONLY_NO_COACHING",
+  request_id: "request-detail-1",
+};
+
+const degradedMatchDetailFixture: MatchDetailResponse = {
+  ...matchDetailFixture,
+  static_data_status: { available: false, version: null, code: "STATIC_DATA_UNAVAILABLE" },
+  blue_team: [
+    {
+      ...matchDetailFixture.blue_team[0],
+      champion: null,
+      items: [null, null],
+    },
+    ...matchDetailFixture.blue_team.slice(1),
+  ],
+};
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("MatchDetailClient", () => {
+  it("renders two five-player teams and identifies the selected player", async () => {
+    vi.mocked(getMatchDetail).mockResolvedValue(matchDetailFixture);
+    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+
+    expect(await screen.findByRole("heading", { name: /match details/i })).toBeVisible();
+    expect(screen.getAllByRole("row")).toHaveLength(12);
+    expect(screen.getByText("Selected player").closest("tr")).toHaveAttribute("data-selected", "true");
+    expect(screen.getByText(/recorded match data only/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /generate review/i })).not.toBeInTheDocument();
+    expect(screen.getByAltText("Champion: Ahri")).toHaveAttribute("src", "https://cdn.example/champions/103.png");
+    expect(screen.getAllByAltText("Item: Doran's Blade")).not.toHaveLength(0);
+  });
+
+  it("keeps numeric data visible when static data is unavailable", async () => {
+    vi.mocked(getMatchDetail).mockResolvedValue(degradedMatchDetailFixture);
+    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+
+    expect(await screen.findByText(/静态游戏数据暂不可用/)).toBeVisible();
+    expect(screen.getAllByText("7 / 3 / 8")).not.toHaveLength(0);
+    expect(screen.getByText("英雄 #103")).toBeVisible();
+    expect(screen.getAllByText("装备 #1055")).not.toHaveLength(0);
+    expect(screen.queryByAltText("Champion 2 英雄")).not.toBeInTheDocument();
+  });
+
+  it("shows localized loading and an actionable retry with safe request support", async () => {
+    vi.mocked(getMatchDetail)
+      .mockRejectedValueOnce(new ApiClientError("RIOT_RATE_LIMITED", { retry_after_seconds: 8 }, true, "request-429"))
+      .mockResolvedValueOnce(matchDetailFixture);
+    const user = userEvent.setup();
+    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在加载对局详情…");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Riot 服务繁忙，请在 8 秒后重试。");
+    await user.click(screen.getByText("支持详情"));
+    expect(screen.getByText("请求 ID：request-429")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("heading", { name: "对局详情" })).toBeVisible();
+    expect(getMatchDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports when the requested player is absent from the match", async () => {
+    vi.mocked(getMatchDetail).mockResolvedValue({ ...matchDetailFixture, selected_puuid: "different-puuid" });
+    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("This player is not in the match data.");
+  });
+
+  it("aborts a stale request before it can replace the newer match", async () => {
+    let firstSignal: AbortSignal | undefined;
+    vi.mocked(getMatchDetail)
+      .mockImplementationOnce((_input, signal) => {
+        firstSignal = signal;
+        return new Promise(() => undefined);
+      })
+      .mockResolvedValueOnce({ ...matchDetailFixture, match_id: "NA1_new" });
+    const view = render(<MatchDetailClient locale="en-US" matchId="NA1_old" puuid="selected-puuid" platform="NA1" />);
+    view.rerender(<MatchDetailClient locale="en-US" matchId="NA1_new" puuid="selected-puuid" platform="NA1" />);
+
+    await waitFor(() => expect(firstSignal?.aborted).toBe(true));
+    expect(await screen.findByText(/NA1_new/)).toBeVisible();
+  });
+});

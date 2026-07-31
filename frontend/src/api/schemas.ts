@@ -106,8 +106,8 @@ export const matchDetailResponseSchema = z
     duration_seconds: z.number().int(),
     game_version: z.string(),
     selected_puuid: z.string(),
-    blue_team: z.array(hydratedParticipantSchema),
-    red_team: z.array(hydratedParticipantSchema),
+    blue_team: z.array(hydratedParticipantSchema).length(5),
+    red_team: z.array(hydratedParticipantSchema).length(5),
     static_data_status: staticDataStatusSchema,
     scope_notice_code: z.literal("DATA_ONLY_NO_COACHING"),
     request_id: z.string(),
@@ -129,6 +129,7 @@ export const errorResponseSchema = z
   .strict();
 
 export type PlayerProfile = z.infer<typeof playerProfileSchema>;
+export type HydratedParticipant = z.infer<typeof hydratedParticipantSchema>;
 export type RecentMatchItem = z.infer<typeof recentMatchItemSchema>;
 export type RecentMatchesResponse = z.infer<typeof recentMatchesResponseSchema>;
 export type MatchDetailResponse = z.infer<typeof matchDetailResponseSchema>;
