@@ -56,6 +56,7 @@ class FakeRiotGateway:
             puuid="fresh-puuid",
             profileIconId=30,
             summonerLevel=99,
+            revisionDate=1720000000000,
         )
         self.failure: ApiError | None = None
 

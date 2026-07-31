@@ -11,7 +11,12 @@ def test_player_normalization_preserves_canonical_riot_id() -> None:
     profile = normalize_player(
         AccountDto(puuid="p", gameName="Canonical Name", tagLine="1115"),
         SummonerDto(
-            id="summoner", accountId="account", puuid="p", profileIconId=29, summonerLevel=772
+            id="summoner",
+            accountId="account",
+            puuid="p",
+            profileIconId=29,
+            summonerLevel=772,
+            revisionDate=1720000000000,
         ),
         Platform.NA1,
     )
@@ -32,6 +37,7 @@ def test_player_normalization_rejects_mismatched_identity_records() -> None:
                 puuid="other-puuid",
                 profileIconId=29,
                 summonerLevel=772,
+                revisionDate=1720000000000,
             ),
             Platform.NA1,
         )

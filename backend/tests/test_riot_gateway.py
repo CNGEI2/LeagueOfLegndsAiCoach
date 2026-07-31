@@ -72,6 +72,7 @@ async def test_gateway_uses_platform_host_for_summoner_lookup() -> None:
                 "puuid": "puuid-1",
                 "profileIconId": 23,
                 "summonerLevel": 99,
+                "revisionDate": 1720000000000,
             },
         )
 
@@ -82,6 +83,55 @@ async def test_gateway_uses_platform_host_for_summoner_lookup() -> None:
 
     assert summoner.profile_icon_id == 23
     assert seen_url.startswith("https://na1.api.riotgames.com/")
+
+
+@pytest.mark.asyncio
+async def test_gateway_accepts_current_summoner_payload_without_legacy_identity_fields() -> None:
+    """Requiring retired legacy IDs would reject the current successful Summoner-V4 shape."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            json={
+                "profileIconId": 23,
+                "puuid": "sanitized-puuid",
+                "revisionDate": 1720000000000,
+                "summonerLevel": 99,
+            },
+        )
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
+        summoner = await RiotGateway(
+            RiotHttpClient(api_key="RGAPI-fake", client=raw_client)
+        ).get_summoner_by_puuid(platform=Platform.NA1, puuid="sanitized-puuid")
+
+    assert summoner.puuid == "sanitized-puuid"
+    assert summoner.profile_icon_id == 23
+    assert summoner.summoner_level == 99
+    assert summoner.revision_date == 1720000000000
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_summoner_without_required_revision_date() -> None:
+    """Making revisionDate optional would weaken the current response contract."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            json={
+                "profileIconId": 23,
+                "puuid": "sanitized-puuid",
+                "summonerLevel": 99,
+            },
+        )
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
+        with pytest.raises(ApiError) as caught:
+            await RiotGateway(
+                RiotHttpClient(api_key="RGAPI-fake", client=raw_client)
+            ).get_summoner_by_puuid(platform=Platform.NA1, puuid="sanitized-puuid")
+
+    assert caught.value.code == "RIOT_INVALID_RESPONSE"
 
 
 @pytest.mark.asyncio

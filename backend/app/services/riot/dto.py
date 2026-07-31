@@ -16,12 +16,12 @@ class AccountDto(RiotDto):
 
 
 class SummonerDto(RiotDto):
-    id: str
-    account_id: str = Field(alias="accountId")
+    id: str | None = None
+    account_id: str | None = Field(default=None, alias="accountId")
     puuid: str
     profile_icon_id: int = Field(alias="profileIconId")
     summoner_level: int = Field(alias="summonerLevel")
-    revision_date: int | None = Field(default=None, alias="revisionDate")
+    revision_date: int = Field(alias="revisionDate")
 
 
 class MatchMetadataDto(RiotDto):

@@ -7,7 +7,7 @@ install:
 	cd frontend && pnpm install --frozen-lockfile
 
 dev-backend:
-	cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000
+	cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000 --no-access-log
 
 dev-frontend:
 	cd frontend && pnpm dev
