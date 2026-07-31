@@ -9,7 +9,7 @@ from app.core.errors import ApiError
 from app.core.routing import Platform
 from app.main import create_app
 from app.schemas.domain import PlayerProfile, PlayerView, StaticAsset, StaticDataStatus
-from tests.conftest import FakeDatabase
+from tests.conftest import FakeDatabase, FakeMatchService
 
 
 class FakePlayerService:
@@ -61,7 +61,9 @@ def player_service() -> FakePlayerService:
 def player_client(
     settings: Settings, player_service: FakePlayerService
 ) -> Generator[TestClient, None, None]:
-    services = AppServices(player_service=player_service, closers=())
+    services = AppServices(
+        player_service=player_service, match_service=FakeMatchService(), closers=()
+    )
     with TestClient(
         create_app(settings=settings, database=FakeDatabase(), services=services)
     ) as test_client:
@@ -180,7 +182,9 @@ def test_lifespan_closes_services_before_database_exactly_once(settings: Setting
 
     database = OrderedDatabase()
     closer = OrderedCloser()
-    services = AppServices(player_service=FakePlayerService(), closers=(closer,))
+    services = AppServices(
+        player_service=FakePlayerService(), match_service=FakeMatchService(), closers=(closer,)
+    )
 
     with TestClient(create_app(settings=settings, database=database, services=services)):
         pass
@@ -207,7 +211,9 @@ def test_lifespan_closes_database_when_service_shutdown_fails(settings: Settings
 
     database = OrderedDatabase()
     closer = FailingCloser()
-    services = AppServices(player_service=FakePlayerService(), closers=(closer,))
+    services = AppServices(
+        player_service=FakePlayerService(), match_service=FakeMatchService(), closers=(closer,)
+    )
 
     with (
         pytest.raises(RuntimeError, match="close failed"),
@@ -243,7 +249,11 @@ def test_lifespan_attempts_all_service_closers_after_a_close_failure(settings: S
     database = OrderedDatabase()
     first = FailingCloser()
     second = SecondCloser()
-    services = AppServices(player_service=FakePlayerService(), closers=(first, second))
+    services = AppServices(
+        player_service=FakePlayerService(),
+        match_service=FakeMatchService(),
+        closers=(first, second),
+    )
 
     with (
         pytest.raises(RuntimeError, match="first close failed"),

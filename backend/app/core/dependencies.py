@@ -6,7 +6,10 @@ from fastapi import Request
 
 from app.core.config import Settings
 from app.core.database import Database
+from app.repositories.matches import SqlMatchRepository
 from app.repositories.players import SqlPlayerRepository
+from app.repositories.recent_matches import SqlRecentMatchRepository
+from app.services.matches import MatchResolver, MatchService
 from app.services.players import PlayerResolver, PlayerService
 from app.services.riot.client import RiotHttpClient
 from app.services.riot.gateway import RiotGateway
@@ -21,6 +24,7 @@ class AsyncCloser(Protocol):
 @dataclass(frozen=True)
 class AppServices:
     player_service: PlayerResolver
+    match_service: MatchResolver
     closers: tuple[AsyncCloser, ...]
 
     async def close(self) -> None:
@@ -46,12 +50,25 @@ def build_services(*, settings: Settings, database: Database) -> AppServices:
         total_timeout_seconds=settings.riot_total_timeout_seconds,
         retry_max_delay_seconds=settings.riot_retry_max_delay_seconds,
     )
+    gateway = RiotGateway(riot_client)
+    static_resolver = StaticDataResolver(StaticDataClient(static_raw_client))
+    player_service = PlayerService(
+        repository=SqlPlayerRepository(database.session_factory),
+        gateway=gateway,
+        static_resolver=static_resolver,
+        cache_ttl_seconds=settings.player_cache_ttl_seconds,
+    )
     return AppServices(
-        player_service=PlayerService(
-            repository=SqlPlayerRepository(database.session_factory),
-            gateway=RiotGateway(riot_client),
-            static_resolver=StaticDataResolver(StaticDataClient(static_raw_client)),
-            cache_ttl_seconds=settings.player_cache_ttl_seconds,
+        player_service=player_service,
+        match_service=MatchService(
+            player_service=player_service,
+            gateway=gateway,
+            recent_repository=SqlRecentMatchRepository(database.session_factory),
+            match_repository=SqlMatchRepository(database.session_factory),
+            static_resolver=static_resolver,
+            recent_cache_ttl_seconds=settings.recent_matches_cache_ttl_seconds,
+            match_retention_days=settings.match_retention_days,
+            max_concurrency=settings.riot_max_concurrency,
         ),
         closers=(riot_raw_client, static_raw_client),
     )

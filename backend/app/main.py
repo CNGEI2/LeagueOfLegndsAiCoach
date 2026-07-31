@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.health import router as health_router
+from app.api.matches import router as matches_router
 from app.api.players import router as players_router
 from app.core.config import Settings
 from app.core.database import Database, DatabaseProtocol
@@ -56,6 +57,7 @@ def create_app(
     application.add_middleware(RequestIdMiddleware)
     application.include_router(health_router)
     application.include_router(players_router)
+    application.include_router(matches_router)
     return application
 
 

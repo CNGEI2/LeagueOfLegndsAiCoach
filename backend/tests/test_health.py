@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.core.dependencies import AppServices
 from app.main import create_app
-from tests.conftest import FakeDatabase, FakePlayerService
+from tests.conftest import FakeDatabase, FakeMatchService, FakePlayerService
 
 
 def test_liveness_returns_service_identity(client: TestClient) -> None:
@@ -48,7 +48,9 @@ def test_readiness_is_safe_when_riot_key_is_missing(fake_database: FakeDatabase)
         riot_api_key="",
     )
 
-    services = AppServices(player_service=FakePlayerService(), closers=())
+    services = AppServices(
+        player_service=FakePlayerService(), match_service=FakeMatchService(), closers=()
+    )
     with TestClient(
         create_app(settings=settings, database=fake_database, services=services)
     ) as test_client:

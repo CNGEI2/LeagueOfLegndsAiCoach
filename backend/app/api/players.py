@@ -1,11 +1,13 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 
 from app.core.dependencies import AppServices, get_services
 from app.core.errors import ApiError
 from app.core.logging import bind_safe_request_context
 from app.core.routing import Platform
+from app.schemas.domain import Locale
+from app.schemas.matches import RecentMatchesResponse
 from app.schemas.players import ResolvePlayerResponse
 
 router = APIRouter(
@@ -43,3 +45,18 @@ async def resolve_player(
         tag_line=normalized_tag_line,
     )
     return ResolvePlayerResponse(player=player, request_id=request.state.request_id)
+
+
+@router.get("/{puuid}/matches", response_model=RecentMatchesResponse)
+async def recent_matches(
+    request: Request,
+    puuid: Annotated[str, Path(min_length=1, max_length=128)],
+    services: Annotated[AppServices, Depends(get_services)],
+    platform: Platform,
+    count: Annotated[int, Query(ge=1, le=10)] = 10,
+    locale: Locale = Locale.EN_US,
+) -> RecentMatchesResponse:
+    data = await services.match_service.list_recent(
+        platform=platform, puuid=puuid, count=count, locale=locale
+    )
+    return RecentMatchesResponse(**data.model_dump(), request_id=request.state.request_id)

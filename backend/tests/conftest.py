@@ -31,9 +31,19 @@ class FakePlayerService:
         raise AssertionError(f"player service should not be called by health endpoints: {kwargs}")
 
 
+class FakeMatchService:
+    async def list_recent(self, **kwargs: object) -> object:
+        raise AssertionError(f"match service should not be called by health endpoints: {kwargs}")
+
+    async def get_detail(self, **kwargs: object) -> object:
+        raise AssertionError(f"match service should not be called by health endpoints: {kwargs}")
+
+
 @pytest.fixture
 def fake_services() -> AppServices:
-    return AppServices(player_service=FakePlayerService(), closers=())
+    return AppServices(
+        player_service=FakePlayerService(), match_service=FakeMatchService(), closers=()
+    )
 
 
 @pytest.fixture
