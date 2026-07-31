@@ -70,7 +70,7 @@ make smoke-riot
 
 CI runs non-integration backend checks, the PostgreSQL integration gate, and all frontend checks. It intentionally does not run a live Riot smoke flow because development keys and smoke identities are local secrets.
 
-Verification evidence for this workstation is recorded by the delivery run: automated unit/type/build checks and the PostgreSQL gate are run locally when the service is available. Docker Compose has not been verified here because Docker CLI access is unavailable; it remains unverified, not passed. Live Riot smoke and browser acceptance are only recorded after they are actually observed.
+Observed acceptance on this workstation: automated unit/type/build checks and the local PostgreSQL gate passed; the live smoke completed with the safe generic result `matches=10 locales=2 repeat=ok`. Real English and Chinese browser flows displayed ten newest-to-oldest matches, localized champion/item assets, supported and visibly unsupported queues, accessible standard-match detail, responsive narrow layouts, and the permanent data-only notice without behavioral or causality claims. Controlled degraded/error checks preserved numeric statistics and showed localized safe recovery states. Docker Compose remains unverified because Docker CLI access is unavailable; it is not recorded as passed.
 
 ### Configuration
 
@@ -169,7 +169,7 @@ make smoke-riot
 
 CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。由于开发密钥和冒烟账号属于本地机密，CI 有意不运行在线 Riot 冒烟流程。
 
-本机验证证据由实际交付运行记录：自动化单元/类型/构建检查与 PostgreSQL 门会在服务可用时本地执行。此 Mac 没有 Docker CLI，Docker Compose 尚未验证，不能标记为已通过。在线 Riot 冒烟和浏览器验收只会在实际观察后记录。
+本机已实际观察到以下验收结果：自动化单元/类型/构建检查与本地 PostgreSQL 门通过；在线冒烟以安全通用结果 `matches=10 locales=2 repeat=ok` 完成。真实中英文浏览器流程展示了十场按新到旧排列的对局、本地化英雄与装备资源、明确区分的支持/不支持队列、可访问的标准对局详情、窄屏响应式布局和永久的数据范围提示，且没有行为或因果判断。受控降级与错误检查保留了数值统计，并提供本地化的安全恢复状态。此 Mac 没有 Docker CLI，Docker Compose 仍未验证，不能标记为已通过。
 
 ### 配置
 
