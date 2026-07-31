@@ -19,6 +19,7 @@ class ApiError(Exception):
         params: dict[str, Any] | None = None,
         retryable: bool,
     ) -> None:
+        super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
