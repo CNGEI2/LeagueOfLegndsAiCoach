@@ -6,10 +6,19 @@ const { getRecentMatchesMock } = vi.hoisted(() => ({ getRecentMatchesMock: vi.fn
 
 vi.mock("@/api/client", () => ({
   getRecentMatches: getRecentMatchesMock,
-  ApiClientError: class ApiClientError extends Error {},
+  ApiClientError: class ApiClientError extends Error {
+    constructor(
+      readonly code: string,
+      readonly params: Record<string, unknown>,
+      readonly retryable: boolean,
+      readonly requestId: string | null,
+    ) {
+      super(code);
+    }
+  },
 }));
 
-import { getRecentMatches } from "@/api/client";
+import { ApiClientError, getRecentMatches } from "@/api/client";
 import type { RecentMatchesResponse } from "@/api/schemas";
 import { PlayerPageClient } from "@/components/player-page-client";
 
@@ -141,6 +150,29 @@ describe("PlayerPageClient", () => {
     await user.click(await screen.findByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { name: "PlayerName#1115" })).toBeVisible();
     expect(getRecentMatches).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a localized request ID in support details for safe API errors", async () => {
+    vi.mocked(getRecentMatches).mockRejectedValue(
+      new ApiClientError("RIOT_RATE_LIMITED", { retry_after_seconds: 12 }, true, "request-500"),
+    );
+    const user = userEvent.setup();
+    render(<PlayerPageClient locale="zh-CN" puuid="puuid-1" platform="NA1" />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("无法加载近期对局。");
+    expect(screen.getByRole("button", { name: "重试" })).toBeVisible();
+    await user.click(screen.getByText("支持详情"));
+    expect(screen.getByText("请求 ID：request-500")).toBeVisible();
+  });
+
+  it("does not expose unsafe exception text for generic failures", async () => {
+    vi.mocked(getRecentMatches).mockRejectedValue(new Error("private upstream response body"));
+    render(<PlayerPageClient locale="en-US" puuid="puuid-1" platform="NA1" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Recent matches could not be loaded.");
+    expect(screen.queryByText("private upstream response body")).not.toBeInTheDocument();
+    expect(screen.queryByText("Support details")).not.toBeInTheDocument();
   });
 
   it("warns about degraded static data and uses localized image alternatives", async () => {

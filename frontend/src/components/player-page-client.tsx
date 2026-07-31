@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { getRecentMatches } from "@/api/client";
+import { ApiClientError, getRecentMatches } from "@/api/client";
 import type { RecentMatchesResponse } from "@/api/schemas";
 import { DataState } from "@/components/data-state";
 import { PlayerHeader } from "@/components/player-header";
@@ -12,7 +12,16 @@ import { getMessages } from "@/i18n/messages";
 
 type PageState =
   | { status: "loading" }
-  | { status: "error"; requestKey: string }
+  | {
+      status: "error";
+      requestKey: string;
+      error: {
+        code: string;
+        params: Record<string, unknown>;
+        retryable: boolean;
+        requestId: string | null;
+      } | null;
+    }
   | { status: "success"; requestKey: string; response: RecentMatchesResponse };
 
 export function PlayerPageClient({
@@ -36,8 +45,22 @@ export function PlayerPageClient({
       .then((response) => {
         if (!controller.signal.aborted) setState({ status: "success", requestKey, response });
       })
-      .catch(() => {
-        if (!controller.signal.aborted) setState({ status: "error", requestKey });
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setState({
+            status: "error",
+            requestKey,
+            error:
+              error instanceof ApiClientError
+                ? {
+                    code: error.code,
+                    params: error.params,
+                    retryable: error.retryable,
+                    requestId: error.requestId,
+                  }
+                : null,
+          });
+        }
       });
 
     return () => controller.abort();
@@ -49,7 +72,12 @@ export function PlayerPageClient({
   if (state.status === "error") {
     return (
       <main className="player-page">
-        <DataState state="error" messages={messages} onRetry={() => setRetry((value) => value + 1)} />
+        <DataState
+          state="error"
+          messages={messages}
+          requestId={state.error?.requestId}
+          onRetry={() => setRetry((value) => value + 1)}
+        />
       </main>
     );
   }

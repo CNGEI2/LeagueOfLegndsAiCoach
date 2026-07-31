@@ -15,6 +15,16 @@ function detailUnavailableMessage(match: RecentMatchItem, messages: Messages) {
   return messages.detailUnavailable;
 }
 
+function numericValue(value: number | null, messages: Messages) {
+  return value === null ? messages.unavailable : String(value);
+}
+
+function kdaValue(match: RecentMatchItem, messages: Messages) {
+  const { assists, deaths, kills } = match.participant;
+  if (kills === null || deaths === null || assists === null) return messages.unavailable;
+  return `${kills} / ${deaths} / ${assists}`;
+}
+
 export function RecentMatchCard({
   locale,
   puuid,
@@ -41,6 +51,40 @@ export function RecentMatchCard({
         <time className="utility-data" dateTime={match.started_at}>
           {new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(matchDate)}
         </time>
+        <p className="utility-data">{messages.kda}: {kdaValue(match, messages)}</p>
+        <p className="utility-data">{messages.cs}: {numericValue(match.participant.cs, messages)}</p>
+      </div>
+      <div className="match-game-assets">
+        {match.participant.champion ? (
+          <>
+            {/* The backend supplies a localized public static-data URL; no fixed Next image host is safe here. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={match.participant.champion.image_url}
+              alt={fill(messages.championAlt, { name: match.participant.champion.name })}
+            />
+          </>
+        ) : (
+          <p className="utility-data">{messages.champion} #{match.participant.champion_id}</p>
+        )}
+        <ul aria-label={messages.item} className="match-item-assets">
+          {match.participant.item_ids.map((itemId, index) => {
+            const item = match.participant.items[index];
+            return (
+              <li key={`${itemId}-${index}`}>
+                {item ? (
+                  <>
+                    {/* The backend supplies a localized public static-data URL; no fixed Next image host is safe here. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={item.image_url} alt={fill(messages.itemAlt, { name: item.name })} />
+                  </>
+                ) : (
+                  <span className="utility-data">{messages.item} #{itemId}</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       </div>
       <div className="match-slip-meta">
         <p className="utility-data">{messages.matchId}: {match.match_id}</p>

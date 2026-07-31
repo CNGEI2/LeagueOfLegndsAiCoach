@@ -33,6 +33,13 @@ export const enUS = {
   matchDetails: "View match details",
   detailUnavailable: "Match details are not available for this queue.",
   futureReviewUnavailable: "This match is not available for future review.",
+  champion: "Champion",
+  item: "Item",
+  championAlt: "Champion: {name}",
+  itemAlt: "Item: {name}",
+  kda: "K/D/A",
+  cs: "CS",
+  unavailable: "Unavailable",
   language: "Language",
   disclaimer:
     "LoL AI Coach is not endorsed by Riot Games and does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.",

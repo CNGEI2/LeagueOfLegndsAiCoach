@@ -34,6 +34,13 @@ export const zhCN: Messages = {
   matchDetails: "查看对局详情",
   detailUnavailable: "该队列暂不提供对局详情。",
   futureReviewUnavailable: "暂不支持复盘",
+  champion: "英雄",
+  item: "装备",
+  championAlt: "{name} 英雄",
+  itemAlt: "{name} 装备",
+  kda: "K/D/A",
+  cs: "补刀",
+  unavailable: "暂无数据",
   language: "语言",
   disclaimer:
     "LoL AI Coach 未获得 Riot Games 认可，也不代表 Riot Games 或任何正式参与 Riot Games 产品制作与管理人员的观点或意见。Riot Games 及其相关资产均为 Riot Games, Inc. 的商标或注册商标。",
