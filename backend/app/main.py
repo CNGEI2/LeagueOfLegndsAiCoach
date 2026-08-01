@@ -9,17 +9,21 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.health import router as health_router
 from app.api.matches import router as matches_router
 from app.api.players import router as players_router
+from app.api.replays import router as replays_router
 from app.core.config import Settings
 from app.core.database import Database, DatabaseProtocol
 from app.core.dependencies import AppServices, build_services
 from app.core.errors import ApiError, UnhandledExceptionMiddleware, api_error_handler
 from app.core.request_id import RequestIdMiddleware
+from app.services.replays.storage.base import ReplayStorage
+from app.services.replays.storage.local import LocalReplayStorage
 
 
 def create_app(
     settings: Settings | None = None,
     database: DatabaseProtocol | None = None,
     services: AppServices | None = None,
+    replay_storage: ReplayStorage | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings()
     resolved_database = database or Database(resolved_settings.database_url)
@@ -30,10 +34,18 @@ def create_app(
     else:
         resolved_services = services
 
+    if replay_storage is not None:
+        resolved_storage: ReplayStorage | None = replay_storage
+    elif resolved_settings.replay_storage_backend == "local":
+        resolved_storage = LocalReplayStorage(resolved_settings.replay_local_root)
+    else:
+        resolved_storage = None
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.database = resolved_database
         application.state.services = resolved_services
+        application.state.replay_storage = resolved_storage
         yield
         try:
             await resolved_services.close()
@@ -42,6 +54,7 @@ def create_app(
 
     application = FastAPI(title="LoL AI Coach API", version="0.1.0", lifespan=lifespan)
     application.state.settings = resolved_settings
+    application.state.replay_storage = resolved_storage
     application.add_exception_handler(ApiError, api_error_handler)
     application.add_exception_handler(RequestValidationError, api_error_handler)
     application.add_exception_handler(StarletteHTTPException, api_error_handler)
@@ -50,14 +63,15 @@ def create_app(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
-        expose_headers=["X-Request-ID"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Accept", "Authorization", "Content-Type", "Range"],
+        expose_headers=["Accept-Ranges", "Content-Length", "Content-Range", "X-Request-ID"],
     )
     application.add_middleware(RequestIdMiddleware)
     application.include_router(health_router)
     application.include_router(players_router)
     application.include_router(matches_router)
+    application.include_router(replays_router)
     return application
 
 

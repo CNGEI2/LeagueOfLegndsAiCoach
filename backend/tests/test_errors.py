@@ -27,7 +27,16 @@ def test_cors_exposes_the_request_id_to_browser_clients(client: TestClient) -> N
     response = client.get("/health/live", headers={"Origin": "http://localhost:3000"})
 
     assert response.headers["X-Request-ID"]
-    assert response.headers["access-control-expose-headers"] == "X-Request-ID"
+    exposed = {
+        header.strip()
+        for header in response.headers["access-control-expose-headers"].split(",")
+    }
+    assert exposed == {
+        "Accept-Ranges",
+        "Content-Length",
+        "Content-Range",
+        "X-Request-ID",
+    }
 
 
 def test_cors_preflight_includes_a_request_id(client: TestClient) -> None:
@@ -67,7 +76,11 @@ def test_unhandled_exceptions_keep_request_id_and_cors_headers(
         "request_id": response.headers["X-Request-ID"],
     }
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
-    assert response.headers["access-control-expose-headers"] == "X-Request-ID"
+    exposed = {
+        header.strip()
+        for header in response.headers["access-control-expose-headers"].split(",")
+    }
+    assert "X-Request-ID" in exposed
     assert "secret" not in response.text
 
 

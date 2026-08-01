@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Protocol
 from uuid import UUID, uuid4
 
 from app.core.config import Settings
-from app.core.errors import ApiError
+from app.core.errors import ApiError, replay_not_found, replay_too_large
 from app.models.replay import ReplayUploadRow
 from app.repositories.matches import MatchRepository
 from app.repositories.replays import (
@@ -29,6 +30,14 @@ from app.services.replays.storage.base import (
     ReplayObjectNotFound,
     ReplayStorage,
 )
+
+
+@dataclass(frozen=True)
+class ReplayArtifactContent:
+    artifact_id: UUID
+    media_type: str
+    size_bytes: int
+    object_key: str
 
 RIGHTS_STATEMENT_VERSION = "2026-08-01"
 _ACCEPTED_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".webm"})
@@ -79,6 +88,10 @@ class ReplayServiceProtocol(Protocol):
         self, replay_id: UUID, token: str, *, now: datetime | None = None
     ) -> list[ReplayArtifactResponse]: ...
 
+    async def get_ready_artifact_content(
+        self, replay_id: UUID, artifact_id: UUID, token: str
+    ) -> ReplayArtifactContent: ...
+
     async def retry(
         self, replay_id: UUID, token: str, *, now: datetime | None = None
     ) -> ReplayStatusData: ...
@@ -120,6 +133,11 @@ class DisabledReplayService:
     async def list_artifacts(
         self, replay_id: UUID, token: str, *, now: datetime | None = None
     ) -> list[ReplayArtifactResponse]:
+        raise _replay_disabled()
+
+    async def get_ready_artifact_content(
+        self, replay_id: UUID, artifact_id: UUID, token: str
+    ) -> ReplayArtifactContent:
         raise _replay_disabled()
 
     async def retry(
@@ -250,7 +268,7 @@ class ReplayService:
         if ReplayStatus(row.status) == ReplayStatus.UPLOADED:
             return _status_data(row)
         if ReplayStatus(row.status) != ReplayStatus.CREATED:
-            raise _replay_not_found()
+            raise replay_not_found()
         if row.upload_expires_at <= clock:
             raise ApiError(
                 status_code=410,
@@ -259,12 +277,7 @@ class ReplayService:
                 retryable=False,
             )
         if actual_size_bytes > self._settings.replay_max_bytes:
-            raise ApiError(
-                status_code=413,
-                code="REPLAY_TOO_LARGE",
-                message="The uploaded replay exceeds the maximum allowed size.",
-                retryable=False,
-            )
+            raise replay_too_large()
         if actual_size_bytes > row.declared_size_bytes:
             raise ApiError(
                 status_code=422,
@@ -292,7 +305,7 @@ class ReplayService:
             return _status_data(row)
 
         if status not in {ReplayStatus.CREATED, ReplayStatus.UPLOADED}:
-            raise _replay_not_found()
+            raise replay_not_found()
         if row.upload_expires_at <= clock:
             raise ApiError(
                 status_code=410,
@@ -326,12 +339,7 @@ class ReplayService:
             ) from error
 
         if stored.size_bytes > self._settings.replay_max_bytes:
-            raise ApiError(
-                status_code=413,
-                code="REPLAY_TOO_LARGE",
-                message="The uploaded replay exceeds the maximum allowed size.",
-                retryable=False,
-            )
+            raise replay_too_large()
         if stored.size_bytes > row.declared_size_bytes:
             raise ApiError(
                 status_code=422,
@@ -385,7 +393,7 @@ class ReplayService:
         row = await self._authorize(replay_id, token)
         status = ReplayStatus(row.status)
         if status in {ReplayStatus.DELETING, ReplayStatus.DELETED, ReplayStatus.EXPIRED}:
-            raise _replay_not_found()
+            raise replay_not_found()
 
         expires_at = clock + _ARTIFACT_ACCESS_TTL
         artifacts = await self._artifact_repository.list_for_replay(replay_id)
@@ -410,6 +418,22 @@ class ReplayService:
             )
             for artifact in artifacts
         ]
+
+    async def get_ready_artifact_content(
+        self, replay_id: UUID, artifact_id: UUID, token: str
+    ) -> ReplayArtifactContent:
+        row = await self._authorize(replay_id, token)
+        if ReplayStatus(row.status) != ReplayStatus.READY:
+            raise replay_not_found()
+        for artifact in await self._artifact_repository.list_for_replay(replay_id):
+            if artifact.id == artifact_id:
+                return ReplayArtifactContent(
+                    artifact_id=artifact.id,
+                    media_type=artifact.media_type,
+                    size_bytes=artifact.size_bytes,
+                    object_key=artifact.object_key,
+                )
+        raise replay_not_found()
 
     async def retry(
         self, replay_id: UUID, token: str, *, now: datetime | None = None
@@ -502,13 +526,13 @@ class ReplayService:
 
     async def _authorize(self, replay_id: UUID, token: str) -> ReplayUploadRow:
         if not token:
-            raise _replay_not_found()
+            raise replay_not_found()
         row = await self._replay_repository.get(replay_id)
         if row is None or row.token_digest is None:
-            raise _replay_not_found()
+            raise replay_not_found()
         token_secret = self._settings.replay_token_secret.get_secret_value().encode("utf-8")
         if not verify_replay_token(token_secret, token, row.token_digest):
-            raise _replay_not_found()
+            raise replay_not_found()
         return row
 
     def _validate_create_request(self, request: ReplayCreateRequest) -> None:
@@ -523,12 +547,7 @@ class ReplayService:
                 retryable=False,
             )
         if request.declared_size_bytes > self._settings.replay_max_bytes:
-            raise ApiError(
-                status_code=413,
-                code="REPLAY_TOO_LARGE",
-                message="The declared replay size exceeds the maximum allowed size.",
-                retryable=False,
-            )
+            raise replay_too_large()
         if request.declared_size_bytes <= 0 or request.game_time_zero_ms < 0:
             raise ApiError(
                 status_code=422,
@@ -583,10 +602,3 @@ def _replay_disabled() -> ApiError:
     )
 
 
-def _replay_not_found() -> ApiError:
-    return ApiError(
-        status_code=404,
-        code="REPLAY_NOT_FOUND",
-        message="The requested replay was not found.",
-        retryable=False,
-    )

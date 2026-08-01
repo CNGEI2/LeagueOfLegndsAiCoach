@@ -62,6 +62,9 @@ class FakeReplayService:
     async def list_artifacts(self, *args: object, **kwargs: object) -> object:
         raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
 
+    async def get_ready_artifact_content(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
     async def retry(self, *args: object, **kwargs: object) -> object:
         raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
 

@@ -27,6 +27,24 @@ class ApiError(Exception):
         self.retryable = retryable
 
 
+def replay_not_found() -> ApiError:
+    return ApiError(
+        status_code=404,
+        code="REPLAY_NOT_FOUND",
+        message="The requested replay was not found.",
+        retryable=False,
+    )
+
+
+def replay_too_large() -> ApiError:
+    return ApiError(
+        status_code=413,
+        code="REPLAY_TOO_LARGE",
+        message="The uploaded replay exceeds the maximum allowed size.",
+        retryable=False,
+    )
+
+
 def _error_response(
     *,
     request: Request,

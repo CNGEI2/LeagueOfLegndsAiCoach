@@ -81,3 +81,8 @@ class ReplayArtifactResponse(DomainModel):
     height: int | None
     size_bytes: int
     access: ReplayArtifactAccess
+
+
+class ReplayArtifactsResponse(DomainModel):
+    artifacts: tuple[ReplayArtifactResponse, ...]
+    request_id: str
