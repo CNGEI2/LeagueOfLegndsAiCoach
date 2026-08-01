@@ -71,3 +71,15 @@ def test_production_replay_requires_gateway_rate_limits() -> None:
         replay_gateway_rate_limits_enforced=True,
     )
     assert settings.replay_gateway_rate_limits_enforced is True
+
+
+def test_unknown_replay_storage_backend_is_rejected_by_pydantic() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, replay_storage_backend="gcs")  # type: ignore[arg-type]
+
+
+def test_build_replay_storage_fail_closed_when_disabled() -> None:
+    from app.services.replays.storage.factory import build_replay_storage
+
+    with pytest.raises(ValueError, match="disabled"):
+        build_replay_storage(Settings(_env_file=None, replay_enabled=False))
