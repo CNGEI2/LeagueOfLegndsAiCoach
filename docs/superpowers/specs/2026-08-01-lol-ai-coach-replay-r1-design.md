@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-01
 
-**Status:** Approved design direction; written-spec review pending
+**Status:** Approved by user
 
 **Depends on:** Phase 2 Riot integration (`feature/phase2-riot-integration`)
 
