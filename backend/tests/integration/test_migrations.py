@@ -82,6 +82,8 @@ async def test_replay_migration_round_trip_preserves_riot_cache_tables(
         await asyncio.to_thread(command.upgrade, config, "head")
         tables_after_reupgrade = await _table_names(test_database_url)
         assert {"players", "recent_match_caches", "matches"}.issubset(tables_after_reupgrade)
-        assert {"replay_uploads", "replay_jobs", "replay_artifacts"}.issubset(tables_after_reupgrade)
+        assert {"replay_uploads", "replay_jobs", "replay_artifacts"}.issubset(
+            tables_after_reupgrade
+        )
     finally:
         await asyncio.to_thread(command.upgrade, config, "head")

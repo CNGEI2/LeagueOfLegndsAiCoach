@@ -230,6 +230,7 @@ class ReplayProcessor:
                 skipped_transcode = False
 
         if not skipped_transcode:
+
             async def _on_progress(percent: int) -> None:
                 nonlocal row
                 try:

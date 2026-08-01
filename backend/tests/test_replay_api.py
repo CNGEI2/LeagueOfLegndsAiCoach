@@ -142,9 +142,7 @@ class ControllableReplayService:
                 size_bytes=2048,
                 access=ReplayArtifactAccess(
                     mode="bearer",
-                    url=(
-                        f"/api/v1/replays/{REPLAY_ID}/artifacts/{ARTIFACT_ID}/content"
-                    ),
+                    url=(f"/api/v1/replays/{REPLAY_ID}/artifacts/{ARTIFACT_ID}/content"),
                     expires_at=NOW + timedelta(minutes=5),
                 ),
             )
@@ -311,9 +309,7 @@ def test_create_replay_returns_access_token_and_matching_request_id(
 def test_wrong_bearer_token_returns_replay_not_found(
     replay_client: TestClient,
 ) -> None:
-    response = replay_client.get(
-        f"/api/v1/replays/{REPLAY_ID}", headers=_auth("wrong")
-    )
+    response = replay_client.get(f"/api/v1/replays/{REPLAY_ID}", headers=_auth("wrong"))
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "REPLAY_NOT_FOUND"
@@ -342,12 +338,8 @@ def test_illegal_bearer_formats_return_replay_not_found(
 def test_complete_is_idempotent_at_api_layer(
     replay_client: TestClient, replay_service: ControllableReplayService
 ) -> None:
-    first = replay_client.post(
-        f"/api/v1/replays/{REPLAY_ID}/complete", headers=_auth()
-    )
-    second = replay_client.post(
-        f"/api/v1/replays/{REPLAY_ID}/complete", headers=_auth()
-    )
+    first = replay_client.post(f"/api/v1/replays/{REPLAY_ID}/complete", headers=_auth())
+    second = replay_client.post(f"/api/v1/replays/{REPLAY_ID}/complete", headers=_auth())
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -371,12 +363,8 @@ def test_local_put_streams_and_marks_uploaded(
     )
 
     assert response.status_code == 204
-    assert replay_service.mark_uploaded_calls == [
-        {"replay_id": REPLAY_ID, "actual_size_bytes": 10}
-    ]
-    assert (
-        replay_storage.resolve_key(f"source/{REPLAY_ID}/input").read_bytes() == payload
-    )
+    assert replay_service.mark_uploaded_calls == [{"replay_id": REPLAY_ID, "actual_size_bytes": 10}]
+    assert replay_storage.resolve_key(f"source/{REPLAY_ID}/input").read_bytes() == payload
 
 
 def test_local_put_rejects_oversize_content_length(replay_client: TestClient) -> None:
@@ -445,12 +433,8 @@ def test_retry_and_delete_idempotent(
     assert retry.json()["status"] == "queued"
     assert replay_service.retry_calls == 1
 
-    first_delete = replay_client.delete(
-        f"/api/v1/replays/{REPLAY_ID}", headers=_auth()
-    )
-    second_delete = replay_client.delete(
-        f"/api/v1/replays/{REPLAY_ID}", headers=_auth()
-    )
+    first_delete = replay_client.delete(f"/api/v1/replays/{REPLAY_ID}", headers=_auth())
+    second_delete = replay_client.delete(f"/api/v1/replays/{REPLAY_ID}", headers=_auth())
     assert first_delete.status_code == 200
     assert second_delete.status_code == 200
     assert first_delete.json()["status"] == "deleting"
@@ -467,9 +451,7 @@ def test_status_and_artifacts_manifest(
     assert status.json()["status"] == "ready"
     assert status.json()["request_id"] == status.headers["X-Request-ID"]
 
-    artifacts = replay_client.get(
-        f"/api/v1/replays/{REPLAY_ID}/artifacts", headers=_auth()
-    )
+    artifacts = replay_client.get(f"/api/v1/replays/{REPLAY_ID}/artifacts", headers=_auth())
     assert artifacts.status_code == 200
     body = artifacts.json()
     assert body["artifacts"][0]["artifact_id"] == str(ARTIFACT_ID)

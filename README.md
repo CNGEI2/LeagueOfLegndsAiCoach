@@ -14,7 +14,7 @@ LoL AI Coach is a bilingual League of Legends match-data browser. Phase 2 resolv
 - The tag line is independent of platform. For example, a numeric tag such as `#1234` is valid and is not inferred from `NA1`.
 - Queue `400` (Normal Draft) and `420` (Ranked Solo/Duo) are marked as data-supported. Other returned queues remain visible but do not offer a detail view when their team structure is unsupported.
 - Static data comes from a match-compatible Data Dragon version. `en-US` maps to `en_US`; `zh-CN` maps to `zh_CN`. If names or assets cannot be resolved, numeric data still appears with a localized degraded-data warning; the app never substitutes current-patch names silently.
-- Not in Phase 2: Match Timeline, scores, coaching findings, AI calls, behavioral judgment, positioning, mechanics, awareness, intent, causality, OP.GG integration, replay processing, video uploads, or raw upstream JSON storage.
+- Not in Phase 2 / Replay R1: Match Timeline, scores, coaching findings, AI calls, behavioral judgment, positioning, mechanics, awareness, intent, causality, OP.GG integration, or raw upstream JSON storage.
 
 ### Requirements
 
@@ -22,6 +22,7 @@ LoL AI Coach is a bilingual League of Legends match-data browser. Phase 2 resolv
 - pnpm 11+ (CI uses pnpm 11.9.0)
 - Python 3.11+
 - PostgreSQL 17 for repository integration verification
+- FFmpeg and ffprobe on `PATH` for local replay processing (`brew install ffmpeg` on macOS)
 - Docker Desktop with Docker Compose only for the optional container workflow
 
 ### Local setup
@@ -54,6 +55,15 @@ make dev-backend
 make dev-frontend
 ```
 
+For Replay R1, also set `REPLAY_ENABLED=true` and a local-only `REPLAY_TOKEN_SECRET` of at least 32 bytes (never commit the secret):
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+make dev-replay-worker
+```
+
+Local replay files default to `<repo>/var/replays` unless `REPLAY_LOCAL_ROOT` overrides that path. Compose mounts a private `replay_data` volume at `/var/lib/lol-ai-coach/replays` for both the API and `replay-worker`.
+
 Open `http://localhost:3000/zh-CN` or `http://localhost:3000/en-US`.
 
 ### Verification and live smoke
@@ -61,12 +71,20 @@ Open `http://localhost:3000/zh-CN` or `http://localhost:3000/en-US`.
 ```bash
 make verify
 TEST_DATABASE_URL=postgresql+asyncpg://lol_ai_coach:lol_ai_coach@localhost:5432/lol_ai_coach_test make verify-postgres
+make verify-replay
+make verify-replay-ffmpeg
+TEST_DATABASE_URL=postgresql+asyncpg://lol_ai_coach:lol_ai_coach@localhost:5432/lol_ai_coach_test make verify-replay-postgres
 make smoke-riot
+make smoke-replay
 ```
 
-- `make verify` runs non-integration backend/frontend tests, lint, formatting, type checks, production build, and a whitespace check. It does not require a database.
+- `make verify` runs non-integration backend/frontend tests (excluding real FFmpeg), lint, formatting, type checks, production build, and a whitespace check. It does not require a database.
 - `make verify-postgres` requires a dedicated, reachable `TEST_DATABASE_URL`, applies Alembic, and runs the PostgreSQL repository integration suite. It fails rather than silently skipping when the variable or database is absent.
+- `make verify-replay` runs Replay unit/API/frontend tests only (`not integration and not replay_ffmpeg`). Frontend portion uses `pnpm test` for the replay Vitest files.
+- `make verify-replay-ffmpeg` requires real `ffmpeg`/`ffprobe` binaries and runs the marked media integration test.
+- `make verify-replay-postgres` requires `TEST_DATABASE_URL`, upgrades migrations, and runs PostgreSQL integration tests excluding the FFmpeg media suite.
 - `make smoke-riot` calls an already-running local backend. It also requires non-empty ignored `RIOT_SMOKE_GAME_NAME`, `RIOT_SMOKE_TAG_LINE`, and `RIOT_SMOKE_PLATFORM` settings plus `RIOT_API_KEY`. The command prints only generic counts on success; it never prints the Riot ID, PUUID, match ID, key, full URL, or raw response body.
+- `make smoke-replay` requires a running API + replay worker, FFmpeg, and ignored `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID`. It generates a 600s 320×180 lavfi fixture at runtime, exercises create/upload/complete/poll/artifacts/delete, and prints only a generic line such as `replay=ready artifacts=3 delete=ok`.
 
 CI runs non-integration backend checks, the PostgreSQL integration gate, and all frontend checks. It intentionally does not run a live Riot smoke flow because development keys and smoke identities are local secrets.
 
@@ -84,6 +102,13 @@ Observed acceptance on this workstation: automated unit/type/build checks and th
 | `RIOT_SMOKE_PLATFORM` | Smoke platform; Phase 2 supports `NA1` only. |
 | `SMOKE_API_BASE_URL` | Already-running local backend base URL, default `http://localhost:8000`. |
 | `NEXT_PUBLIC_API_BASE_URL` | Browser-visible backend base URL; contains no secret. |
+| `REPLAY_ENABLED` | Enables Replay APIs/worker. Default `false`. |
+| `REPLAY_TOKEN_SECRET` | Server-only HMAC secret (≥32 bytes) when replay is enabled. Leave empty in `.env.example`; generate locally. |
+| `REPLAY_STORAGE_BACKEND` | `local` (default) or `s3`. |
+| `REPLAY_LOCAL_ROOT` | Private local storage root. Defaults to `<repo>/var/replays`. Compose uses `/var/lib/lol-ai-coach/replays`. |
+| `REPLAY_S3_*` | S3-compatible endpoint/region/bucket/credentials/prefix. Never expose to the frontend. |
+| `REPLAY_GATEWAY_RATE_LIMITS_ENFORCED` | Production gate. Must be `true` when `APP_ENV=production` and replay is enabled. Documents intended limits: 5 create/hour/IP, 2 local uploads/IP, 60 API requests/minute/IP. |
+| `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID` | Ignored local smoke binding identity; leave empty in `.env.example`. |
 
 ### API
 
@@ -93,9 +118,27 @@ Observed acceptance on this workstation: automated unit/type/build checks and th
 - `GET /api/v1/players/{puuid}/matches`: returns up to ten newest-to-oldest normalized matches.
 - `GET /api/v1/matches/{match_id}`: returns a localized supported match detail for the selected player.
 
-### Replay roadmap
+### Replay R1
 
-The next phase can add authorized replay upload and timestamped frame evidence to supplement data. Public, purchased, or third-party teaching video is never ingested without explicit permission from its rights holder. An AI may propose a rule from authorized evidence, but a human must approve it before any product use.
+Replay R1 adds authorized upload of an uploader-owned recording bound to a supported match, worker-side probe/normalize/frame extraction, status polling, artifact access, retry, and deletion. It does **not** call OpenAI, score play, or emit coaching conclusions. UI copy states that replay evidence is ready without an AI coaching conclusion.
+
+Rights limits: only uploader-owned or explicitly authorized recordings may be uploaded. Public, purchased, or third-party teaching video is never ingested without the rights holder’s permission. Rights attestation version `2026-08-01` is required on create.
+
+Retention: upload URLs expire after 30 minutes; source media is retained 24 hours after processing; derived artifacts are retained 7 days after `ready`; user delete and retention jobs scrub media and sensitive metadata.
+
+S3 bucket CORS (when `REPLAY_STORAGE_BACKEND=s3`): allow the frontend origin for `PUT`/`GET` of presigned object URLs, expose `ETag`/`Content-Length`, and do not put bucket credentials in browser code.
+
+Seven Replay APIs:
+
+- `POST /api/v1/replays`
+- `PUT /api/v1/replays/{replay_id}/content` (local backend upload)
+- `POST /api/v1/replays/{replay_id}/complete`
+- `GET /api/v1/replays/{replay_id}`
+- `GET /api/v1/replays/{replay_id}/artifacts`
+- `POST /api/v1/replays/{replay_id}/retry`
+- `DELETE /api/v1/replays/{replay_id}`
+
+Artifact bytes are served at `GET /api/v1/replays/{replay_id}/artifacts/{artifact_id}/content` with the possession token (or via short-lived presigned URLs in S3 mode).
 
 ### Riot disclaimer
 
@@ -113,7 +156,7 @@ LoL AI Coach 是一个中英双语的《英雄联盟》对局数据浏览工具�
 - 标签与平台相互独立。例如 `#1234` 这类数字标签有效，绝不会由 `NA1` 自动推断。
 - 队列 `400`（自选模式）和 `420`（单排/双排）标记为数据支持。其他返回队列仍会展示；若队伍结构不支持，则不会提供详情页。
 - 静态资料使用与对局版本兼容的 Data Dragon：`en-US` 映射到 `en_US`，`zh-CN` 映射到 `zh_CN`。若名称或资源无法解析，数值数据仍会展示并给出本地化降级提示；不会偷偷用当前版本名称替代。
-- Phase 2 不包含：Match Timeline、评分、复盘结论、AI 调用、行为判断、走位、操作、意识、意图、因果推断、OP.GG 集成、回放处理、视频上传或原始上游 JSON 存储。
+- Phase 2 / Replay R1 不包含：Match Timeline、评分、复盘结论、AI 调用、行为判断、走位、操作、意识、意图、因果推断、OP.GG 集成或原始上游 JSON 存储。
 
 ### 环境要求
 
@@ -121,6 +164,7 @@ LoL AI Coach 是一个中英双语的《英雄联盟》对局数据浏览工具�
 - pnpm 11+（CI 使用 pnpm 11.9.0）
 - Python 3.11+
 - PostgreSQL 17（仓库集成验证需要）
+- 本地回放处理需要 `PATH` 上的 FFmpeg 与 ffprobe（macOS 可用 `brew install ffmpeg`）
 - Docker Desktop 与 Docker Compose（仅可选容器工作流需要）
 
 ### 本地启动
@@ -153,6 +197,15 @@ make dev-backend
 make dev-frontend
 ```
 
+启用 Replay R1 时，在本地 `.env` 设置 `REPLAY_ENABLED=true`，并生成至少 32 字节、仅本地使用的 `REPLAY_TOKEN_SECRET`（切勿提交）：
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+make dev-replay-worker
+```
+
+本地回放文件默认写入 `<repo>/var/replays`，可用 `REPLAY_LOCAL_ROOT` 覆盖。Compose 会为 API 与 `replay-worker` 挂载私有卷 `replay_data` 到 `/var/lib/lol-ai-coach/replays`。
+
 打开 `http://localhost:3000/zh-CN` 或 `http://localhost:3000/en-US`。
 
 ### 验证与在线冒烟
@@ -160,12 +213,20 @@ make dev-frontend
 ```bash
 make verify
 TEST_DATABASE_URL=postgresql+asyncpg://lol_ai_coach:lol_ai_coach@localhost:5432/lol_ai_coach_test make verify-postgres
+make verify-replay
+make verify-replay-ffmpeg
+TEST_DATABASE_URL=postgresql+asyncpg://lol_ai_coach:lol_ai_coach@localhost:5432/lol_ai_coach_test make verify-replay-postgres
 make smoke-riot
+make smoke-replay
 ```
 
-- `make verify` 运行非集成后端/前端测试、静态检查、格式检查、类型检查、前端生产构建和空白检查，不需要数据库。
+- `make verify` 运行非集成后端/前端测试（排除真实 FFmpeg）、静态检查、格式检查、类型检查、前端生产构建和空白检查，不需要数据库。
 - `make verify-postgres` 需要专用且可连接的 `TEST_DATABASE_URL`，会执行 Alembic 并运行 PostgreSQL 仓库集成测试；变量或数据库缺失时会失败，不会静默跳过。
+- `make verify-replay` 仅运行 Replay 单元/API/前端测试（`not integration and not replay_ffmpeg`）；前端部分用 `pnpm test` 跑 replay Vitest 文件。
+- `make verify-replay-ffmpeg` 需要真实 `ffmpeg`/`ffprobe`，运行标记的媒体集成测试。
+- `make verify-replay-postgres` 需要 `TEST_DATABASE_URL`，升级迁移并运行排除 FFmpeg 媒体套件的 PostgreSQL 集成测试。
 - `make smoke-riot` 调用已经运行的本地后端，同时要求忽略的 `RIOT_SMOKE_GAME_NAME`、`RIOT_SMOKE_TAG_LINE`、`RIOT_SMOKE_PLATFORM` 非空，以及已配置的 `RIOT_API_KEY`。成功时仅输出通用计数；不会输出 Riot ID、PUUID、对局 ID、密钥、完整 URL 或原始响应体。
+- `make smoke-replay` 需要已运行的 API 与 replay worker、FFmpeg，以及忽略的 `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID`。脚本会在运行时生成 600 秒 320×180 lavfi 测试视频，完成 create/upload/complete/poll/artifacts/delete，并只打印类似 `replay=ready artifacts=3 delete=ok` 的通用结果。
 
 CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。由于开发密钥和冒烟账号属于本地机密，CI 有意不运行在线 Riot 冒烟流程。
 
@@ -183,6 +244,13 @@ CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。
 | `RIOT_SMOKE_PLATFORM` | 冒烟平台；Phase 2 仅支持 `NA1`。 |
 | `SMOKE_API_BASE_URL` | 已运行本地后端的基础地址，默认 `http://localhost:8000`。 |
 | `NEXT_PUBLIC_API_BASE_URL` | 浏览器可见的后端基础地址；不包含密钥。 |
+| `REPLAY_ENABLED` | 启用 Replay API/worker；默认 `false`。 |
+| `REPLAY_TOKEN_SECRET` | 启用回放时使用的服务端 HMAC 密钥（≥32 字节）。`.env.example` 必须留空，仅在本地生成。 |
+| `REPLAY_STORAGE_BACKEND` | `local`（默认）或 `s3`。 |
+| `REPLAY_LOCAL_ROOT` | 私有本地存储根目录；默认 `<repo>/var/replays`。Compose 使用 `/var/lib/lol-ai-coach/replays`。 |
+| `REPLAY_S3_*` | S3 兼容 endpoint/region/bucket/凭证/前缀；绝不能暴露给前端。 |
+| `REPLAY_GATEWAY_RATE_LIMITS_ENFORCED` | 生产上线门。`APP_ENV=production` 且启用回放时必须为 `true`。文档约定限制：每 IP 每小时 5 次 create、每 IP 2 次本地上传、每 IP 每分钟 60 次 API 请求。 |
+| `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID` | 被忽略的本地冒烟绑定身份；`.env.example` 必须留空。 |
 
 ### API
 
@@ -192,9 +260,27 @@ CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。
 - `GET /api/v1/players/{puuid}/matches`：返回最多十场按新到旧排序的规范化对局。
 - `GET /api/v1/matches/{match_id}`：返回所选玩家的本地化、受支持对局详情。
 
-### 回放路线图
+### Replay R1
 
-下一阶段可以加入已授权的回放上传和带时间戳的画面证据，补充数据来源。未获权利人明确许可时，不会接入公开、购买或第三方教学视频。AI 可以根据获授权证据提出规则，但在产品使用前必须由人工批准。
+Replay R1 支持将上传者自有/已授权录像绑定到受支持对局，由独立 worker 探测、标准化并抽取证据帧，提供状态轮询、产物访问、重试与删除。本阶段**不**调用 OpenAI、不评分、不输出教练结论；界面明确说明录像证据已准备但尚未产生 AI 教练结论。
+
+权利限制：仅允许上传者自有或获得明确授权的录像。未获权利人许可时，不得接入公开、购买或第三方教学视频。创建时必须提交权利声明版本 `2026-08-01`。
+
+保留期：上传地址 30 分钟过期；处理成功或失败后源文件保留 24 小时；`ready` 产物保留 7 天；用户删除与定期清理会清除媒体并擦除敏感元数据。
+
+S3 bucket CORS（`REPLAY_STORAGE_BACKEND=s3` 时）：允许前端源站对预签名对象 URL 做 `PUT`/`GET`，暴露 `ETag`/`Content-Length`，且不得把桶凭证放进浏览器代码。
+
+七个 Replay API：
+
+- `POST /api/v1/replays`
+- `PUT /api/v1/replays/{replay_id}/content`（本地后端上传）
+- `POST /api/v1/replays/{replay_id}/complete`
+- `GET /api/v1/replays/{replay_id}`
+- `GET /api/v1/replays/{replay_id}/artifacts`
+- `POST /api/v1/replays/{replay_id}/retry`
+- `DELETE /api/v1/replays/{replay_id}`
+
+产物字节通过带 possession token 的 `GET /api/v1/replays/{replay_id}/artifacts/{artifact_id}/content` 提供（S3 模式也可使用短时预签名 URL）。
 
 ### Riot 声明
 

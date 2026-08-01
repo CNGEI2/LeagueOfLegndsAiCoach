@@ -178,15 +178,11 @@ def test_replay_api_responses_never_leak_sensitive_fields(
     assert status.status_code == 200
     _assert_private(status.text)
 
-    artifacts = privacy_client.get(
-        f"/api/v1/replays/{REPLAY_ID}/artifacts", headers=headers
-    )
+    artifacts = privacy_client.get(f"/api/v1/replays/{REPLAY_ID}/artifacts", headers=headers)
     assert artifacts.status_code == 200
     _assert_private(artifacts.text)
 
-    complete = privacy_client.post(
-        f"/api/v1/replays/{REPLAY_ID}/complete", headers=headers
-    )
+    complete = privacy_client.post(f"/api/v1/replays/{REPLAY_ID}/complete", headers=headers)
     assert complete.status_code == 200
     _assert_private(complete.text)
 

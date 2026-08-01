@@ -568,7 +568,7 @@ describe("ReplaySection accessibility and bilingual copy", () => {
     renderSection("en-US");
 
     const gallery = await screen.findByTestId("replay-artifact-gallery");
-    const images = within(gallery).getAllByRole("img");
+    const images = await within(gallery).findAllByRole("img");
     expect(images[0]).toHaveAttribute(
       "alt",
       en.anchorFrameAlt.replace("{time}", "00:00"),

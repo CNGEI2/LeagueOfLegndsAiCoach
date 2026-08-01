@@ -393,9 +393,7 @@ class SqlReplayJobRepository:
                 )
                 created += 1
 
-            exclude_ids = (
-                ReplayUploadRow.id.not_in(delete_all_ids) if delete_all_ids else true()
-            )
+            exclude_ids = ReplayUploadRow.id.not_in(delete_all_ids) if delete_all_ids else true()
             source_rows = list(
                 (
                     await session.execute(

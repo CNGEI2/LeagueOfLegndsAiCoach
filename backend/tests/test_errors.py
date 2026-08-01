@@ -28,8 +28,7 @@ def test_cors_exposes_the_request_id_to_browser_clients(client: TestClient) -> N
 
     assert response.headers["X-Request-ID"]
     exposed = {
-        header.strip()
-        for header in response.headers["access-control-expose-headers"].split(",")
+        header.strip() for header in response.headers["access-control-expose-headers"].split(",")
     }
     assert exposed == {
         "Accept-Ranges",
@@ -77,8 +76,7 @@ def test_unhandled_exceptions_keep_request_id_and_cors_headers(
     }
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
     exposed = {
-        header.strip()
-        for header in response.headers["access-control-expose-headers"].split(",")
+        header.strip() for header in response.headers["access-control-expose-headers"].split(",")
     }
     assert "X-Request-ID" in exposed
     assert "secret" not in response.text

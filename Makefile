@@ -1,4 +1,4 @@
-.PHONY: install dev-backend dev-frontend test lint typecheck verify verify-postgres smoke-riot docker-up docker-down
+.PHONY: install dev-backend dev-frontend dev-replay-worker test lint typecheck verify verify-postgres verify-replay verify-replay-ffmpeg verify-replay-postgres smoke-riot smoke-replay docker-up docker-down
 
 install:
 	python3 -m venv backend/.venv
@@ -12,8 +12,11 @@ dev-backend:
 dev-frontend:
 	cd frontend && pnpm dev
 
+dev-replay-worker:
+	cd backend && .venv/bin/python -m app.workers.replay
+
 test:
-	cd backend && .venv/bin/pytest -m "not integration" -v
+	cd backend && .venv/bin/pytest -m "not integration and not replay_ffmpeg" -v
 	cd frontend && pnpm test
 
 lint:
@@ -34,8 +37,23 @@ verify-postgres:
 	cd backend; DATABASE_URL=$$TEST_DATABASE_URL .venv/bin/alembic upgrade head
 	cd backend; .venv/bin/pytest -m integration -v
 
+verify-replay:
+	cd backend && .venv/bin/pytest tests/test_replay_*.py -m "not integration and not replay_ffmpeg" -v
+	cd frontend && pnpm test -- replay-api-client.test.ts replay-storage.test.ts replay-section.test.tsx
+
+verify-replay-ffmpeg:
+	cd backend && .venv/bin/pytest tests/integration/test_replay_ffmpeg.py -m replay_ffmpeg -v
+
+verify-replay-postgres:
+	test -n "$$TEST_DATABASE_URL"
+	cd backend; DATABASE_URL=$$TEST_DATABASE_URL .venv/bin/alembic upgrade head
+	cd backend; .venv/bin/pytest tests/integration -m "integration and not replay_ffmpeg" -v
+
 smoke-riot:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/smoke_riot.py
+
+smoke-replay:
+	PYTHONPATH=backend backend/.venv/bin/python scripts/smoke_replay.py
 
 docker-up:
 	docker compose up --build

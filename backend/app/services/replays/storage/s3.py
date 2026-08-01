@@ -187,9 +187,7 @@ class S3ReplayStorage:
 
         size = await asyncio.to_thread(_head_size)
         if not (0 <= start <= end < size):
-            raise ValueError(
-                f"invalid range start={start} end={end} for object size={size}"
-            )
+            raise ValueError(f"invalid range start={start} end={end} for object size={size}")
 
         remaining = end - start + 1
         offset = start

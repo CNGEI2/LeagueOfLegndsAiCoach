@@ -39,6 +39,7 @@ class ReplayArtifactContent:
     size_bytes: int
     object_key: str
 
+
 RIGHTS_STATEMENT_VERSION = "2026-08-01"
 _ACCEPTED_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".webm"})
 _CONTENT_TYPES_BY_EXTENSION: dict[str, frozenset[str]] = {
@@ -410,9 +411,7 @@ class ReplayService:
                 size_bytes=artifact.size_bytes,
                 access=ReplayArtifactAccess(
                     mode="bearer",
-                    url=(
-                        f"/api/v1/replays/{artifact.replay_id}/artifacts/{artifact.id}/content"
-                    ),
+                    url=(f"/api/v1/replays/{artifact.replay_id}/artifacts/{artifact.id}/content"),
                     expires_at=expires_at,
                 ),
             )
@@ -600,5 +599,3 @@ def _replay_disabled() -> ApiError:
         message="Replay uploads are disabled.",
         retryable=False,
     )
-
-

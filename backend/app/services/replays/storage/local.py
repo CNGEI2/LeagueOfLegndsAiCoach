@@ -74,9 +74,7 @@ class LocalReplayStorage:
                 async for chunk in chunks:
                     size += len(chunk)
                     if size > max_bytes:
-                        raise ReplayObjectTooLarge(
-                            f"object {key!r} exceeds max_bytes={max_bytes}"
-                        )
+                        raise ReplayObjectTooLarge(f"object {key!r} exceeds max_bytes={max_bytes}")
                     hasher.update(chunk)
                     await asyncio.to_thread(handle.write, chunk)
             finally:
@@ -148,9 +146,7 @@ class LocalReplayStorage:
             raise ReplayObjectNotFound(key)
         size = (await asyncio.to_thread(path.stat)).st_size
         if not (0 <= start <= end < size):
-            raise ValueError(
-                f"invalid range start={start} end={end} for object size={size}"
-            )
+            raise ValueError(f"invalid range start={start} end={end} for object size={size}")
 
         remaining = end - start + 1
         offset = start
