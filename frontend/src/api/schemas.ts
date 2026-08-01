@@ -130,8 +130,107 @@ export const errorResponseSchema = z
   })
   .strict();
 
+export const replayStatusSchema = z.enum([
+  "created",
+  "uploaded",
+  "queued",
+  "probing",
+  "transcoding",
+  "extracting",
+  "ready",
+  "failed",
+  "expired",
+  "deleting",
+  "deleted",
+]);
+
+export const replayArtifactKindSchema = z.enum(["anchor_frame", "verification_frame"]);
+
+export const replayUploadInfoSchema = z
+  .object({
+    method: z.string(),
+    url: z.string(),
+    headers: z.record(z.string(), z.string()),
+    expires_at: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
+export const replayRetentionInfoSchema = z
+  .object({
+    source_hours_after_processing: z.number().int(),
+    derived_days_after_ready: z.number().int(),
+  })
+  .strict();
+
+export const replayCreateResponseSchema = z
+  .object({
+    replay_id: z.string().uuid(),
+    access_token: z.string(),
+    status: replayStatusSchema,
+    upload: replayUploadInfoSchema,
+    retention: replayRetentionInfoSchema,
+    request_id: requestIdSchema,
+  })
+  .strict();
+
+export const replayStatusResponseSchema = z
+  .object({
+    replay_id: z.string().uuid(),
+    status: replayStatusSchema,
+    processing_stage: z.string().nullable(),
+    progress_percent: z.number().int(),
+    normalized_duration_ms: z.number().int().nullable(),
+    width: z.number().int().nullable(),
+    height: z.number().int().nullable(),
+    available_game_time_start_ms: z.number().int().nullable(),
+    available_game_time_end_ms: z.number().int().nullable(),
+    warning_codes: z.array(z.string()),
+    error_code: z.string().nullable(),
+    error_retryable: z.boolean().nullable(),
+    source_delete_after: z.string().datetime({ offset: true }).nullable(),
+    derived_delete_after: z.string().datetime({ offset: true }).nullable(),
+    request_id: requestIdSchema,
+  })
+  .strict();
+
+export const replayArtifactAccessSchema = z
+  .object({
+    mode: z.enum(["bearer", "presigned"]),
+    url: z.string(),
+    expires_at: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
+export const replayArtifactSchema = z
+  .object({
+    artifact_id: z.string().uuid(),
+    replay_id: z.string().uuid(),
+    kind: replayArtifactKindSchema,
+    game_time_ms: z.number().int(),
+    video_time_ms: z.number().int(),
+    media_type: z.string(),
+    width: z.number().int().nullable(),
+    height: z.number().int().nullable(),
+    size_bytes: z.number().int(),
+    access: replayArtifactAccessSchema,
+  })
+  .strict();
+
+export const replayArtifactsResponseSchema = z
+  .object({
+    artifacts: z.array(replayArtifactSchema),
+    request_id: requestIdSchema,
+  })
+  .strict();
+
 export type PlayerProfile = z.infer<typeof playerProfileSchema>;
 export type HydratedParticipant = z.infer<typeof hydratedParticipantSchema>;
 export type RecentMatchItem = z.infer<typeof recentMatchItemSchema>;
 export type RecentMatchesResponse = z.infer<typeof recentMatchesResponseSchema>;
 export type MatchDetailResponse = z.infer<typeof matchDetailResponseSchema>;
+export type ReplayCreateResponse = z.infer<typeof replayCreateResponseSchema>;
+export type ReplayStatusResponse = z.infer<typeof replayStatusResponseSchema>;
+export type ReplayArtifactKind = z.infer<typeof replayArtifactKindSchema>;
+export type ReplayArtifactAccess = z.infer<typeof replayArtifactAccessSchema>;
+export type ReplayArtifact = z.infer<typeof replayArtifactSchema>;
+export type ReplayArtifactsResponse = z.infer<typeof replayArtifactsResponseSchema>;
