@@ -18,6 +18,31 @@ vi.mock("@/api/client", () => ({
   },
 }));
 
+vi.mock("@/components/replay-section", () => ({
+  ReplaySection: ({
+    matchId,
+    puuid,
+    platform,
+    locale,
+    matchDurationSeconds,
+  }: {
+    matchId: string;
+    puuid: string;
+    platform: string;
+    locale: string;
+    matchDurationSeconds: number;
+  }) => (
+    <section
+      data-testid="replay-section"
+      data-match-id={matchId}
+      data-puuid={puuid}
+      data-platform={platform}
+      data-locale={locale}
+      data-duration={String(matchDurationSeconds)}
+    />
+  ),
+}));
+
 import { ApiClientError, getMatchDetail } from "@/api/client";
 import type { MatchDetailResponse } from "@/api/schemas";
 import { MatchDetailClient } from "@/components/match-detail-client";
@@ -106,6 +131,13 @@ describe("MatchDetailClient", () => {
     expect(screen.queryByRole("button", { name: /generate review/i })).not.toBeInTheDocument();
     expect(screen.getByAltText("Champion: Ahri")).toHaveAttribute("src", "https://cdn.example/champions/103.png");
     expect(screen.getAllByAltText("Item: Doran's Blade")).not.toHaveLength(0);
+
+    const replay = screen.getByTestId("replay-section");
+    expect(replay).toHaveAttribute("data-match-id", "NA1_123456789");
+    expect(replay).toHaveAttribute("data-puuid", "selected-puuid");
+    expect(replay).toHaveAttribute("data-platform", "NA1");
+    expect(replay).toHaveAttribute("data-locale", "en-US");
+    expect(replay).toHaveAttribute("data-duration", "1800");
   });
 
   it("keeps internal participant IDs private and uses stable team-local labels", async () => {
@@ -178,6 +210,7 @@ describe("MatchDetailClient", () => {
     render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("This player is not in the match data.");
+    expect(screen.queryByTestId("replay-section")).not.toBeInTheDocument();
   });
 
   it("does not show support details for a sanitized request ID on local player validation", async () => {

@@ -39,4 +39,19 @@ describe("message catalogs", () => {
       Object.keys(getMessages("en-US")).sort(),
     );
   });
+
+  it("includes replay R1 bilingual copy without coaching conclusions", () => {
+    const en = getMessages("en-US");
+    const zh = getMessages("zh-CN");
+
+    expect(en.uploadReplay).toMatch(/upload replay/i);
+    expect(zh.uploadReplay).toBe("上传本局录像");
+    expect(en.replayNoAiNotice).toMatch(/no AI coaching conclusions/i);
+    expect(zh.replayNoAiNotice).toMatch(/尚未.*AI.*结论|没有.*AI.*结论/);
+    expect(en.verificationFrame).toBe("Verification frame");
+    expect(zh.verificationFrame).toBe("验证帧");
+    expect(zh.replayNotFound).toBe("回放不存在或访问已失效");
+    expect(en.verificationFrame.toLowerCase()).not.toMatch(/mistake|fight/);
+    expect(zh.verificationFrame).not.toMatch(/失误|团战/);
+  });
 });

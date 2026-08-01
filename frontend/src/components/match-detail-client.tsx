@@ -6,6 +6,7 @@ import { ApiClientError, getMatchDetail } from "@/api/client";
 import type { MatchDetailResponse } from "@/api/schemas";
 import { DataState } from "@/components/data-state";
 import { MatchTeamTable } from "@/components/match-team-table";
+import { ReplaySection } from "@/components/replay-section";
 import type { Locale } from "@/i18n/locales";
 import { getMessages } from "@/i18n/messages";
 
@@ -149,6 +150,13 @@ export function MatchDetailClient({
           messages={messages}
         />
       </div>
+      <ReplaySection
+        locale={locale}
+        matchId={data.match_id}
+        puuid={data.selected_puuid}
+        platform={data.platform}
+        matchDurationSeconds={data.duration_seconds}
+      />
     </main>
   );
 }
