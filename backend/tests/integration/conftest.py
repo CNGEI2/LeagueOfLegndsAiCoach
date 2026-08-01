@@ -52,7 +52,10 @@ async def session_factory(
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     async with integration_engine.begin() as connection:
         await connection.execute(
-            text("TRUNCATE TABLE matches, recent_match_caches, players CASCADE")
+            text(
+                "TRUNCATE TABLE replay_artifacts, replay_jobs, replay_uploads, "
+                "matches, recent_match_caches, players CASCADE"
+            )
         )
     yield async_sessionmaker(
         integration_engine,
