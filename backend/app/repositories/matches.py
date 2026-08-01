@@ -28,6 +28,13 @@ class MatchRepository(Protocol):
         fresh_after: datetime,
     ) -> MatchSnapshot | None: ...
 
+    async def get_for_replay_binding(
+        self,
+        *,
+        platform: Platform,
+        match_id: str,
+    ) -> MatchSnapshot | None: ...
+
     async def put(self, snapshot: MatchSnapshot, *, fetched_at: datetime) -> None: ...
 
     async def delete_expired(self, *, before: datetime) -> int: ...
@@ -48,6 +55,20 @@ class SqlMatchRepository:
             MatchRow.platform == platform.value,
             MatchRow.match_id == match_id,
             MatchRow.fetched_at >= fresh_after,
+        )
+        async with self._session_factory() as session:
+            snapshot = (await session.execute(statement)).scalar_one_or_none()
+        return MatchSnapshot.model_validate(snapshot) if snapshot is not None else None
+
+    async def get_for_replay_binding(
+        self,
+        *,
+        platform: Platform,
+        match_id: str,
+    ) -> MatchSnapshot | None:
+        statement = select(MatchRow.snapshot).where(
+            MatchRow.platform == platform.value,
+            MatchRow.match_id == match_id,
         )
         async with self._session_factory() as session:
             snapshot = (await session.execute(statement)).scalar_one_or_none()

@@ -7,6 +7,10 @@ from app.core.config import Settings
 from app.core.dependencies import AppServices
 from app.main import create_app
 
+# Register once so top-level integration modules (e.g. replay repository contract
+# tests) can use session_factory without double-loading tests.integration.conftest.
+pytest_plugins = ["tests.integration.db"]
+
 
 class FakeDatabase:
     def __init__(self, should_fail: bool = False) -> None:

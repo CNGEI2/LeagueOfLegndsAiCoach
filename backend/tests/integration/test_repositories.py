@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -6,12 +7,42 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.routing import Platform
 from app.models.player import PlayerRow
+from app.models.replay import ReplayUploadRow
 from app.repositories.matches import MatchCacheConflict, SqlMatchRepository
 from app.repositories.players import SqlPlayerRepository
 from app.repositories.recent_matches import SqlRecentMatchRepository
+from app.repositories.replays import SqlReplayJobRepository, SqlReplayRepository
 from app.schemas.domain import MatchSnapshot, ParticipantSnapshot, PlayerProfile
+from app.services.replays.domain import ReplayJobKind, ReplayStatus
 
 pytestmark = pytest.mark.integration
+
+
+def make_replay(**overrides: object) -> ReplayUploadRow:
+    now = datetime.now(UTC)
+    values: dict[str, object] = {
+        "id": uuid4(),
+        "match_id": "NA1_1",
+        "platform": Platform.NA1.value,
+        "selected_puuid": "selected-puuid",
+        "match_duration_ms": 1_800_000,
+        "status": ReplayStatus.CREATED.value,
+        "progress_percent": 0,
+        "token_digest": "a" * 64,
+        "original_filename": "owned.mp4",
+        "declared_content_type": "video/mp4",
+        "declared_size_bytes": 100,
+        "game_time_zero_ms": 1_000,
+        "rights_statement_version": "2026-08-01",
+        "rights_attested_at": now,
+        "upload_expires_at": now + timedelta(minutes=30),
+        "warning_codes": [],
+        "created_at": now,
+        "updated_at": now,
+        "version": 1,
+    }
+    values.update(overrides)
+    return ReplayUploadRow(**values)
 
 
 def make_snapshot(*, match_id: str = "NA1_123", kills: int = 8) -> MatchSnapshot:
@@ -251,3 +282,58 @@ async def test_match_repository_excludes_stale_snapshots_and_deletes_expired_row
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_replay_claim_next_gives_distinct_jobs_to_concurrent_workers(
+    session_factory,
+) -> None:
+    now = datetime.now(UTC)
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    first = await replays.create(make_replay(match_id="NA1_claim_1"))
+    second = await replays.create(make_replay(match_id="NA1_claim_2"))
+    await jobs.enqueue(replay_id=first.id, kind=ReplayJobKind.PROCESS, available_at=now)
+    await jobs.enqueue(replay_id=second.id, kind=ReplayJobKind.PROCESS, available_at=now)
+
+    claimed_a, claimed_b = await asyncio.gather(
+        jobs.claim_next(worker_id="worker-1", now=now),
+        jobs.claim_next(worker_id="worker-2", now=now),
+    )
+    assert claimed_a is not None
+    assert claimed_b is not None
+    assert claimed_a.id != claimed_b.id
+    assert {claimed_a.worker_id, claimed_b.worker_id} == {"worker-1", "worker-2"}
+
+
+@pytest.mark.asyncio
+async def test_replay_claim_next_returns_none_when_single_job_already_claimed(
+    session_factory,
+) -> None:
+    now = datetime.now(UTC)
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    replay = await replays.create(make_replay(match_id="NA1_single"))
+    await jobs.enqueue(replay_id=replay.id, kind=ReplayJobKind.PROCESS, available_at=now)
+
+    first = await jobs.claim_next(worker_id="worker-1", now=now)
+    second = await jobs.claim_next(worker_id="worker-2", now=now)
+    assert first is not None
+    assert second is None
+
+
+@pytest.mark.asyncio
+async def test_replay_duplicate_active_job_blocked_by_partial_unique_index(
+    session_factory,
+) -> None:
+    now = datetime.now(UTC)
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    replay = await replays.create(make_replay(match_id="NA1_unique_job"))
+    await jobs.enqueue(replay_id=replay.id, kind=ReplayJobKind.DELETE_ALL, available_at=now)
+    with pytest.raises(IntegrityError):
+        await jobs.enqueue(
+            replay_id=replay.id,
+            kind=ReplayJobKind.DELETE_ALL,
+            available_at=now,
+        )
