@@ -1,7 +1,8 @@
 from functools import cached_property
 from pathlib import Path
+from typing import Literal, Self
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
@@ -24,6 +25,27 @@ class Settings(BaseSettings):
     riot_smoke_tag_line: str = ""
     riot_smoke_platform: str = "NA1"
     smoke_api_base_url: str = "http://localhost:8000"
+    replay_enabled: bool = False
+    replay_storage_backend: Literal["local", "s3"] = "local"
+    replay_local_root: Path = ROOT_ENV_FILE.parent / "var" / "replays"
+    replay_token_secret: SecretStr = SecretStr("")
+    replay_max_bytes: int = 4 * 1024**3
+    replay_min_duration_seconds: int = 600
+    replay_max_duration_seconds: int = 5400
+    replay_upload_expiry_seconds: int = 1800
+    replay_source_retention_hours: int = 24
+    replay_derived_retention_days: int = 7
+    replay_worker_concurrency: int = 1
+    replay_ffmpeg_path: str = "ffmpeg"
+    replay_ffprobe_path: str = "ffprobe"
+    replay_process_timeout_seconds: int = 7200
+    replay_s3_endpoint_url: str = ""
+    replay_s3_region: str = ""
+    replay_s3_bucket: str = ""
+    replay_s3_access_key_id: SecretStr = SecretStr("")
+    replay_s3_secret_access_key: SecretStr = SecretStr("")
+    replay_s3_prefix: str = "replays"
+    replay_gateway_rate_limits_enforced: bool = False
 
     model_config = SettingsConfigDict(env_file=ROOT_ENV_FILE, extra="ignore")
 
@@ -34,3 +56,20 @@ class Settings(BaseSettings):
     @property
     def riot_configured(self) -> bool:
         return bool(self.riot_api_key.get_secret_value())
+
+    @model_validator(mode="after")
+    def validate_replay_settings(self) -> Self:
+        if not self.replay_enabled:
+            return self
+
+        secret = self.replay_token_secret.get_secret_value()
+        if len(secret.encode("utf-8")) < 32:
+            raise ValueError(
+                "REPLAY_TOKEN_SECRET must contain at least 32 bytes when replay is enabled"
+            )
+        if self.app_env == "production" and not self.replay_gateway_rate_limits_enforced:
+            raise ValueError(
+                "REPLAY_GATEWAY_RATE_LIMITS_ENFORCED must be true in production "
+                "when replay is enabled"
+            )
+        return self

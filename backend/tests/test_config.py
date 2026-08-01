@@ -1,14 +1,25 @@
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from app.core.config import ROOT_ENV_FILE, Settings
 
 
 def test_settings_have_safe_local_defaults() -> None:
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.app_env == "development"
     assert settings.database_url.startswith("postgresql+asyncpg://")
     assert settings.cors_origins == ["http://localhost:3000"]
+
+
+def test_replay_settings_are_disabled_by_default() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.replay_enabled is False
+    assert settings.replay_max_bytes == 4 * 1024**3
+    assert settings.replay_min_duration_seconds == 600
+    assert settings.replay_max_duration_seconds == 5400
 
 
 def test_settings_resolve_the_env_file_from_the_repository_root() -> None:
@@ -18,6 +29,7 @@ def test_settings_resolve_the_env_file_from_the_repository_root() -> None:
 
 def test_settings_parse_comma_separated_cors_origins() -> None:
     settings = Settings(
+        _env_file=None,
         app_env="test",
         database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
         backend_cors_origins="http://localhost:3000,https://coach.example.com",
@@ -27,3 +39,35 @@ def test_settings_parse_comma_separated_cors_origins() -> None:
         "http://localhost:3000",
         "https://coach.example.com",
     ]
+
+
+def test_replay_enabled_requires_token_secret_of_at_least_32_bytes() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, replay_enabled=True, replay_token_secret="")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, replay_enabled=True, replay_token_secret="short")
+    settings = Settings(
+        _env_file=None,
+        replay_enabled=True,
+        replay_token_secret="x" * 32,
+    )
+    assert settings.replay_enabled is True
+
+
+def test_production_replay_requires_gateway_rate_limits() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            replay_enabled=True,
+            replay_token_secret="x" * 32,
+            replay_gateway_rate_limits_enforced=False,
+        )
+    settings = Settings(
+        _env_file=None,
+        app_env="production",
+        replay_enabled=True,
+        replay_token_secret="x" * 32,
+        replay_gateway_rate_limits_enforced=True,
+    )
+    assert settings.replay_gateway_rate_limits_enforced is True
