@@ -21,7 +21,7 @@ from app.services.replays.service import (
     ReplayService,
     ReplayServiceProtocol,
 )
-from app.services.replays.storage.local import LocalReplayStorage
+from app.services.replays.storage.factory import build_replay_storage
 from app.services.riot.client import RiotHttpClient
 from app.services.riot.gateway import RiotGateway
 from app.services.static_data.client import StaticDataClient
@@ -78,7 +78,7 @@ def build_services(*, settings: Settings, database: Database) -> AppServices:
             replay_repository=SqlReplayRepository(session_factory),
             job_repository=SqlReplayJobRepository(session_factory),
             artifact_repository=SqlReplayArtifactRepository(session_factory),
-            storage=LocalReplayStorage(settings.replay_local_root),
+            storage=build_replay_storage(settings),
         )
     else:
         replay_service = DisabledReplayService()

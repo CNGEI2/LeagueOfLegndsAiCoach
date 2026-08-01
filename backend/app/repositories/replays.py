@@ -91,6 +91,8 @@ class ReplayJobRepository(Protocol):
         available_at: datetime | None,
     ) -> ReplayJobRow: ...
 
+    async def cancel(self, job_id: UUID, *, now: datetime) -> ReplayJobRow: ...
+
     async def recover_stale(
         self,
         *,
@@ -306,6 +308,27 @@ class SqlReplayJobRepository:
                 row.finished_at = now
             await session.flush()
             await session.refresh(row)
+            session.expunge(row)
+            return row
+
+    async def cancel(self, job_id: UUID, *, now: datetime) -> ReplayJobRow:
+        statement = (
+            update(ReplayJobRow)
+            .where(ReplayJobRow.id == job_id)
+            .values(
+                status=ReplayJobStatus.CANCELLED.value,
+                finished_at=now,
+                updated_at=now,
+                worker_id=None,
+                claimed_at=None,
+                heartbeat_at=None,
+            )
+            .returning(ReplayJobRow)
+        )
+        async with self._session_factory.begin() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            if row is None:
+                raise ReplayStateConflict("job not found")
             session.expunge(row)
             return row
 

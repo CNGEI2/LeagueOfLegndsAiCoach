@@ -200,6 +200,9 @@ class FakeReplayJobRepository:
     ) -> ReplayJobRow:
         raise AssertionError("fail should not be called from ReplayService")
 
+    async def cancel(self, job_id: UUID, *, now: datetime) -> ReplayJobRow:
+        raise AssertionError("cancel should not be called from ReplayService")
+
     async def recover_stale(
         self,
         *,

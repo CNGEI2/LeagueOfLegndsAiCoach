@@ -172,6 +172,7 @@ class LocalReplayStorage:
     async def delete(self, key: str) -> None:
         path = self.resolve_key(key)
         await asyncio.to_thread(self._unlink_if_exists, path)
+        await asyncio.to_thread(self._unlink_if_exists, self._part_path(path))
 
     @staticmethod
     def _unlink_if_exists(path: Path) -> None:
