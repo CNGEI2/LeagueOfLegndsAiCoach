@@ -21,7 +21,7 @@ from app.schemas.matches import (
     RecentMatchesData,
     RecentMatchItem,
 )
-from tests.conftest import FakeDatabase
+from tests.conftest import FakeDatabase, FakeReplayService
 
 
 def hydrated_participant(
@@ -128,7 +128,12 @@ def match_service() -> FakeMatchService:
 
 @pytest.fixture
 def match_client(settings, match_service: FakeMatchService) -> Generator[TestClient, None, None]:
-    services = AppServices(player_service=object(), match_service=match_service, closers=())
+    services = AppServices(
+        player_service=object(),  # type: ignore[arg-type]
+        match_service=match_service,
+        replay_service=FakeReplayService(),
+        closers=(),
+    )
     with TestClient(
         create_app(settings=settings, database=FakeDatabase(), services=services)
     ) as client:

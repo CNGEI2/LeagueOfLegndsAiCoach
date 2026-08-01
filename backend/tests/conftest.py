@@ -43,10 +43,39 @@ class FakeMatchService:
         raise AssertionError(f"match service should not be called by health endpoints: {kwargs}")
 
 
+class FakeReplayService:
+    async def create(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
+    async def authorize(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
+    async def mark_local_uploaded(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
+    async def complete(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
+    async def get_status(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
+    async def list_artifacts(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
+    async def retry(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
+    async def request_delete(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
+
+
 @pytest.fixture
 def fake_services() -> AppServices:
     return AppServices(
-        player_service=FakePlayerService(), match_service=FakeMatchService(), closers=()
+        player_service=FakePlayerService(),
+        match_service=FakeMatchService(),
+        replay_service=FakeReplayService(),
+        closers=(),
     )
 
 

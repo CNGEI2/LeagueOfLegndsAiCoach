@@ -9,8 +9,19 @@ from app.core.database import Database
 from app.repositories.matches import SqlMatchRepository
 from app.repositories.players import SqlPlayerRepository
 from app.repositories.recent_matches import SqlRecentMatchRepository
+from app.repositories.replays import (
+    SqlReplayArtifactRepository,
+    SqlReplayJobRepository,
+    SqlReplayRepository,
+)
 from app.services.matches import MatchResolver, MatchService
 from app.services.players import PlayerResolver, PlayerService
+from app.services.replays.service import (
+    DisabledReplayService,
+    ReplayService,
+    ReplayServiceProtocol,
+)
+from app.services.replays.storage.local import LocalReplayStorage
 from app.services.riot.client import RiotHttpClient
 from app.services.riot.gateway import RiotGateway
 from app.services.static_data.client import StaticDataClient
@@ -25,6 +36,7 @@ class AsyncCloser(Protocol):
 class AppServices:
     player_service: PlayerResolver
     match_service: MatchResolver
+    replay_service: ReplayServiceProtocol
     closers: tuple[AsyncCloser, ...]
 
     async def close(self) -> None:
@@ -58,18 +70,31 @@ def build_services(*, settings: Settings, database: Database) -> AppServices:
         static_resolver=static_resolver,
         cache_ttl_seconds=settings.player_cache_ttl_seconds,
     )
+    session_factory = database.session_factory
+    if settings.replay_enabled:
+        replay_service: ReplayServiceProtocol = ReplayService(
+            settings=settings,
+            match_repository=SqlMatchRepository(session_factory),
+            replay_repository=SqlReplayRepository(session_factory),
+            job_repository=SqlReplayJobRepository(session_factory),
+            artifact_repository=SqlReplayArtifactRepository(session_factory),
+            storage=LocalReplayStorage(settings.replay_local_root),
+        )
+    else:
+        replay_service = DisabledReplayService()
     return AppServices(
         player_service=player_service,
         match_service=MatchService(
             player_service=player_service,
             gateway=gateway,
-            recent_repository=SqlRecentMatchRepository(database.session_factory),
-            match_repository=SqlMatchRepository(database.session_factory),
+            recent_repository=SqlRecentMatchRepository(session_factory),
+            match_repository=SqlMatchRepository(session_factory),
             static_resolver=static_resolver,
             recent_cache_ttl_seconds=settings.recent_matches_cache_ttl_seconds,
             match_retention_days=settings.match_retention_days,
             max_concurrency=settings.riot_max_concurrency,
         ),
+        replay_service=replay_service,
         closers=(riot_raw_client, static_raw_client),
     )
 
