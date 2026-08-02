@@ -145,7 +145,7 @@ async def test_player_repository_enforces_unique_puuid(session_factory) -> None:
         fetched_at=fetched_at,
         updated_at=fetched_at,
     )
-    duplicate = PlayerRow(
+    same_platform_duplicate = PlayerRow(
         id=uuid4(),
         puuid="unique-puuid",
         platform=Platform.NA1.value,
@@ -158,10 +158,117 @@ async def test_player_repository_enforces_unique_puuid(session_factory) -> None:
         fetched_at=fetched_at,
         updated_at=fetched_at,
     )
+    other_platform = PlayerRow(
+        id=uuid4(),
+        puuid="unique-puuid",
+        platform=Platform.EUW1.value,
+        game_name="Third",
+        tag_line="EUW",
+        game_name_key="third",
+        tag_line_key="euw",
+        summoner_level=3,
+        profile_icon_id=3,
+        fetched_at=fetched_at,
+        updated_at=fetched_at,
+    )
     async with session_factory() as session:
-        session.add_all([first, duplicate])
+        session.add_all([first, other_platform])
+        await session.commit()
+
+    async with session_factory() as session:
+        session.add(same_platform_duplicate)
         with pytest.raises(IntegrityError):
             await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_player_repository_allows_same_puuid_on_distinct_platforms(session_factory) -> None:
+    repository = SqlPlayerRepository(session_factory)
+    fetched_at = datetime.now(UTC)
+    na_profile = PlayerProfile(
+        puuid="cross-platform-puuid",
+        game_name="North",
+        tag_line="NA1",
+        platform=Platform.NA1,
+        summoner_level=40,
+        profile_icon_id=10,
+    )
+    euw_profile = PlayerProfile(
+        puuid="cross-platform-puuid",
+        game_name="Europe",
+        tag_line="EUW",
+        platform=Platform.EUW1,
+        summoner_level=41,
+        profile_icon_id=11,
+    )
+    await repository.upsert(na_profile, fetched_at=fetched_at)
+    await repository.upsert(euw_profile, fetched_at=fetched_at)
+
+    assert (
+        await repository.get_by_puuid(
+            platform=Platform.NA1,
+            puuid="cross-platform-puuid",
+            fresh_after=fetched_at - timedelta(seconds=1),
+        )
+        == na_profile
+    )
+    assert (
+        await repository.get_by_puuid(
+            platform=Platform.EUW1,
+            puuid="cross-platform-puuid",
+            fresh_after=fetched_at - timedelta(seconds=1),
+        )
+        == euw_profile
+    )
+
+
+@pytest.mark.asyncio
+async def test_player_repository_upsert_updates_only_matching_platform_row(
+    session_factory,
+) -> None:
+    repository = SqlPlayerRepository(session_factory)
+    fetched_at = datetime.now(UTC)
+    na_profile = PlayerProfile(
+        puuid="scoped-upsert-puuid",
+        game_name="North",
+        tag_line="NA1",
+        platform=Platform.NA1,
+        summoner_level=10,
+        profile_icon_id=1,
+    )
+    euw_profile = PlayerProfile(
+        puuid="scoped-upsert-puuid",
+        game_name="Europe",
+        tag_line="EUW",
+        platform=Platform.EUW1,
+        summoner_level=20,
+        profile_icon_id=2,
+    )
+    await repository.upsert(na_profile, fetched_at=fetched_at)
+    await repository.upsert(euw_profile, fetched_at=fetched_at)
+
+    updated_na = na_profile.model_copy(
+        update={"game_name": "NorthUpdated", "summoner_level": 99, "profile_icon_id": 99}
+    )
+    updated_at = fetched_at + timedelta(seconds=5)
+    await repository.upsert(updated_na, fetched_at=updated_at)
+
+    assert (
+        await repository.get_by_puuid(
+            platform=Platform.NA1,
+            puuid="scoped-upsert-puuid",
+            fresh_after=fetched_at - timedelta(seconds=1),
+        )
+        == updated_na
+    )
+    assert (
+        await repository.get_by_puuid(
+            platform=Platform.EUW1,
+            puuid="scoped-upsert-puuid",
+            fresh_after=fetched_at - timedelta(seconds=1),
+        )
+        == euw_profile
+    )
 
 
 @pytest.mark.asyncio

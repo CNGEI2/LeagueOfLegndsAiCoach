@@ -54,7 +54,7 @@ async def session_factory(
         await connection.execute(
             text(
                 "TRUNCATE TABLE replay_artifacts, replay_jobs, replay_uploads, "
-                "matches, recent_match_caches, players CASCADE"
+                "player_platform_detections, matches, recent_match_caches, players CASCADE"
             )
         )
     yield async_sessionmaker(

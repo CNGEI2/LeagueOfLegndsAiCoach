@@ -77,8 +77,8 @@ class SqlPlayerRepository:
         }
         statement = insert(PlayerRow).values(**values)
         statement = statement.on_conflict_do_update(
-            index_elements=[PlayerRow.puuid],
-            set_={key: value for key, value in values.items() if key != "puuid"},
+            index_elements=[PlayerRow.platform, PlayerRow.puuid],
+            set_={key: value for key, value in values.items() if key not in {"platform", "puuid"}},
         )
         async with self._session_factory.begin() as session:
             await session.execute(statement)
