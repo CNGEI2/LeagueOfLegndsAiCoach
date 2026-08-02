@@ -54,6 +54,14 @@ def test_compose_defines_independent_replay_worker_with_shared_replay_volume() -
     assert "REPLAY_LOCAL_ROOT" in backend
     assert REPLAY_MOUNT in backend
     assert "build: ./backend" in worker or "build:\n      context: ./backend" in worker
+    # Platform detection is API-side; Compose must pass the flag/TTLs through
+    # or `RIOT_PLATFORM_DETECTION_ENABLED=true` in `.env` cannot take effect.
+    assert "RIOT_PLATFORM_DETECTION_ENABLED: ${RIOT_PLATFORM_DETECTION_ENABLED:-false}" in backend
+    assert "RIOT_PLATFORM_DETECTION_TTL_SECONDS:" in backend
+    assert "RIOT_PLATFORM_DETECTION_NOT_FOUND_TTL_SECONDS:" in backend
+    assert "RIOT_PLATFORM_CONFIRMATION_TTL_SECONDS:" in backend
+    assert "RIOT_ACCOUNT_PRIMARY_REGION:" in backend
+    assert "RIOT_PLATFORM_DETECTION_ENABLED" not in frontend
 
     for forbidden in FRONTEND_FORBIDDEN_ENV:
         assert forbidden not in frontend
