@@ -102,3 +102,57 @@ def test_build_replay_storage_fail_closed_when_disabled() -> None:
 
     with pytest.raises(ValueError, match="disabled"):
         build_replay_storage(Settings(_env_file=None, replay_enabled=False))
+
+
+def test_platform_detection_settings_have_safe_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.riot_platform_detection_enabled is False
+    assert settings.riot_platform_detection_ttl_seconds == 86400
+    assert settings.riot_platform_detection_not_found_ttl_seconds == 300
+    assert settings.riot_platform_confirmation_ttl_seconds == 900
+    assert settings.riot_account_primary_region == "AMERICAS"
+    assert settings.riot_max_concurrency == 4
+
+
+def test_platform_detection_ttl_bounds_are_enforced() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_platform_detection_ttl_seconds=59)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_platform_detection_ttl_seconds=604_801)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_platform_detection_not_found_ttl_seconds=29)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_platform_detection_not_found_ttl_seconds=3601)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_platform_confirmation_ttl_seconds=59)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_platform_confirmation_ttl_seconds=3601)
+
+    settings = Settings(
+        _env_file=None,
+        riot_platform_detection_ttl_seconds=60,
+        riot_platform_detection_not_found_ttl_seconds=30,
+        riot_platform_confirmation_ttl_seconds=60,
+    )
+    assert settings.riot_platform_detection_ttl_seconds == 60
+    assert settings.riot_platform_detection_not_found_ttl_seconds == 30
+    assert settings.riot_platform_confirmation_ttl_seconds == 60
+
+
+def test_riot_account_primary_region_must_be_a_known_region() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_account_primary_region="ATLANTIS")
+    settings = Settings(_env_file=None, riot_account_primary_region="EUROPE")
+    assert settings.riot_account_primary_region == "EUROPE"
+
+
+def test_riot_max_concurrency_is_bounded_as_shared_probe_limit() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_max_concurrency=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, riot_max_concurrency=17)
+    settings = Settings(_env_file=None, riot_max_concurrency=1)
+    assert settings.riot_max_concurrency == 1
+    settings = Settings(_env_file=None, riot_max_concurrency=16)
+    assert settings.riot_max_concurrency == 16
