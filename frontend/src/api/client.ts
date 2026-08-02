@@ -1,8 +1,10 @@
 import type { z } from "zod";
 
 import {
+  detectPlayerResponseSchema,
   errorResponseSchema,
   matchDetailResponseSchema,
+  type Platform,
   recentMatchesResponseSchema,
   replayArtifactsResponseSchema,
   replayCreateResponseSchema,
@@ -94,7 +96,7 @@ async function request<T>(path: string, schema: z.ZodType<T>, options: RequestOp
 }
 
 export type ResolvePlayerInput = {
-  platform: "NA1";
+  platform: Platform;
   gameName: string;
   tagLine: string;
 };
@@ -108,9 +110,46 @@ export async function resolvePlayer(input: ResolvePlayerInput, signal?: AbortSig
   return request(`/api/v1/players/resolve?${query}`, resolvePlayerResponseSchema, { signal });
 }
 
+export type DetectPlayerInput = {
+  riotId: string;
+  locale: Locale;
+};
+
+export async function detectPlayer(input: DetectPlayerInput, signal?: AbortSignal) {
+  return request("/api/v1/players/detect", detectPlayerResponseSchema, {
+    method: "POST",
+    body: {
+      riot_id: input.riotId,
+      locale: input.locale,
+    },
+    signal,
+  });
+}
+
+export type ConfirmPlayerPlatformInput = {
+  detectionId: string;
+  platform: Platform;
+  locale: Locale;
+};
+
+export async function confirmPlayerPlatform(input: ConfirmPlayerPlatformInput, signal?: AbortSignal) {
+  return request(
+    `/api/v1/players/detect/${encodeURIComponent(input.detectionId)}/confirm`,
+    detectPlayerResponseSchema,
+    {
+      method: "POST",
+      body: {
+        platform: input.platform,
+        locale: input.locale,
+      },
+      signal,
+    },
+  );
+}
+
 export type RecentMatchesInput = {
   puuid: string;
-  platform: "NA1";
+  platform: Platform;
   locale: Locale;
   count: number;
 };
@@ -131,7 +170,7 @@ export async function getRecentMatches(input: RecentMatchesInput, signal?: Abort
 export type MatchDetailInput = {
   matchId: string;
   puuid: string;
-  platform: "NA1";
+  platform: Platform;
   locale: Locale;
 };
 
@@ -148,7 +187,7 @@ export async function getMatchDetail(input: MatchDetailInput, signal?: AbortSign
 
 export type CreateReplayInput = {
   matchId: string;
-  platform: "NA1";
+  platform: Platform;
   puuid: string;
   originalFilename: string;
   declaredSizeBytes: number;

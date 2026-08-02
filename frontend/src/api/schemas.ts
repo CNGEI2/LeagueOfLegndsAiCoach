@@ -1,7 +1,25 @@
 import { z } from "zod";
 
 export const localeSchema = z.enum(["zh-CN", "en-US"]);
-export const platformSchema = z.enum(["NA1"]);
+export const platformSchema = z.enum([
+  "BR1",
+  "EUN1",
+  "EUW1",
+  "JP1",
+  "KR",
+  "LA1",
+  "LA2",
+  "NA1",
+  "OC1",
+  "TR1",
+  "RU",
+  "PH2",
+  "SG2",
+  "TH2",
+  "TW2",
+  "VN2",
+]);
+export type Platform = z.infer<typeof platformSchema>;
 const requestIdPattern = /^[0-9a-f]{32}$/;
 const requestIdSchema = z.string().transform((value) => (requestIdPattern.test(value) ? value : null));
 
@@ -90,6 +108,36 @@ export const resolvePlayerResponseSchema = z
     request_id: requestIdSchema,
   })
   .strict();
+
+export const platformCandidateSchema = z
+  .object({
+    platform: platformSchema,
+    display_name: z.string().min(1),
+  })
+  .strict();
+
+export const resolvedDetectionResponseSchema = z
+  .object({
+    status: z.literal("resolved"),
+    player: playerProfileSchema,
+    request_id: requestIdSchema,
+  })
+  .strict();
+
+export const confirmationRequiredResponseSchema = z
+  .object({
+    status: z.literal("confirmation_required"),
+    detection_id: z.string().uuid(),
+    expires_at: z.string().datetime({ offset: true }),
+    candidates: z.array(platformCandidateSchema).min(1),
+    request_id: requestIdSchema,
+  })
+  .strict();
+
+export const detectPlayerResponseSchema = z.discriminatedUnion("status", [
+  resolvedDetectionResponseSchema,
+  confirmationRequiredResponseSchema,
+]);
 
 export const recentMatchesResponseSchema = z
   .object({
@@ -228,6 +276,10 @@ export type HydratedParticipant = z.infer<typeof hydratedParticipantSchema>;
 export type RecentMatchItem = z.infer<typeof recentMatchItemSchema>;
 export type RecentMatchesResponse = z.infer<typeof recentMatchesResponseSchema>;
 export type MatchDetailResponse = z.infer<typeof matchDetailResponseSchema>;
+export type PlatformCandidate = z.infer<typeof platformCandidateSchema>;
+export type ResolvedDetectionResponse = z.infer<typeof resolvedDetectionResponseSchema>;
+export type ConfirmationRequiredResponse = z.infer<typeof confirmationRequiredResponseSchema>;
+export type DetectPlayerResponse = z.infer<typeof detectPlayerResponseSchema>;
 export type ReplayCreateResponse = z.infer<typeof replayCreateResponseSchema>;
 export type ReplayStatusResponse = z.infer<typeof replayStatusResponseSchema>;
 export type ReplayArtifactKind = z.infer<typeof replayArtifactKindSchema>;

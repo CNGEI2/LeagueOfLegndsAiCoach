@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiClientError, getRecentMatches } from "@/api/client";
-import type { RecentMatchesResponse } from "@/api/schemas";
+import type { Platform, RecentMatchesResponse } from "@/api/schemas";
 import { DataState } from "@/components/data-state";
 import { PlayerHeader } from "@/components/player-header";
 import { RecentMatchList } from "@/components/recent-match-list";
@@ -31,7 +31,7 @@ export function PlayerPageClient({
 }: {
   locale: Locale;
   puuid: string;
-  platform: "NA1";
+  platform: Platform;
 }) {
   const messages = getMessages(locale);
   const [state, setState] = useState<PageState>({ status: "loading" });

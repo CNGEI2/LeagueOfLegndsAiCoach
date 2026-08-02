@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getMatchDetail, resolvePlayer } from "@/api/client";
+import {
+  confirmPlayerPlatform,
+  detectPlayer,
+  getMatchDetail,
+  resolvePlayer,
+} from "@/api/client";
+import {
+  confirmationRequiredResponseSchema,
+  detectPlayerResponseSchema,
+  platformSchema,
+  resolvedDetectionResponseSchema,
+} from "@/api/schemas";
 
 function validParticipant(puuid: string, teamId: number, championId: number) {
   return {
@@ -191,5 +202,130 @@ describe("API client", () => {
       code: "INVALID_API_RESPONSE",
       requestId: null,
     });
+  });
+});
+
+const validPlayer = {
+  puuid: "puuid-1",
+  game_name: "PlayerName",
+  tag_line: "1115",
+  platform: "NA1" as const,
+  summoner_level: 772,
+  profile_icon_id: 29,
+  profile_icon: {
+    entity_id: 29,
+    name: "Profile icon",
+    image_url: "https://ddragon.leagueoflegends.com/cdn/16.15.1/img/profileicon/29.png",
+  },
+  profile_static_data_status: {
+    available: true,
+    version: "16.15.1",
+    code: null,
+  },
+};
+
+describe("platform detection schemas", () => {
+  it("accepts the closed 16-value platform enum and rejects unknown values", () => {
+    expect(platformSchema.options).toHaveLength(16);
+    expect(platformSchema.safeParse("NA1").success).toBe(true);
+    expect(platformSchema.safeParse("XYZ1").success).toBe(false);
+  });
+
+  it("rejects confirmation responses with missing candidates or naive expiry", () => {
+    expect(
+      confirmationRequiredResponseSchema.safeParse({
+        status: "confirmation_required",
+        detection_id: "12345678-1234-5678-1234-567812345678",
+        expires_at: "2026-08-02T12:15:00",
+        candidates: [{ platform: "NA1", display_name: "North America" }],
+        request_id: "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+      }).success,
+    ).toBe(false);
+    expect(
+      confirmationRequiredResponseSchema.safeParse({
+        status: "confirmation_required",
+        detection_id: "12345678-1234-5678-1234-567812345678",
+        expires_at: "2026-08-02T12:15:00Z",
+        candidates: [],
+        request_id: "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects detection responses with extra fields", () => {
+    expect(
+      resolvedDetectionResponseSchema.safeParse({
+        status: "resolved",
+        player: validPlayer,
+        request_id: "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+        extra: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      detectPlayerResponseSchema.safeParse({
+        status: "confirmation_required",
+        detection_id: "12345678-1234-5678-1234-567812345678",
+        expires_at: "2026-08-02T12:15:00Z",
+        candidates: [{ platform: "NA1", display_name: "North America", extra: true }],
+        request_id: "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("platform detection client", () => {
+  it("posts detectPlayer with riot_id and locale", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "resolved",
+          player: validPlayer,
+          request_id: "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await detectPlayer({ riotId: "PlayerName#1115", locale: "zh-CN" });
+
+    expect(result.status).toBe("resolved");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/v1/players/detect",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ riot_id: "PlayerName#1115", locale: "zh-CN" }),
+      }),
+    );
+  });
+
+  it("posts confirmPlayerPlatform with encoded detection id", async () => {
+    const detectionId = "12345678-1234-5678-1234-567812345678";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "resolved",
+          player: { ...validPlayer, platform: "EUW1" },
+          request_id: "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await confirmPlayerPlatform({
+      detectionId,
+      platform: "EUW1",
+      locale: "en-US",
+    });
+
+    expect(result.status).toBe("resolved");
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:8000/api/v1/players/detect/${encodeURIComponent(detectionId)}/confirm`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ platform: "EUW1", locale: "en-US" }),
+      }),
+    );
   });
 });

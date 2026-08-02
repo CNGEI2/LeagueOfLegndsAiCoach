@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiClientError, getMatchDetail } from "@/api/client";
-import type { MatchDetailResponse } from "@/api/schemas";
+import type { MatchDetailResponse, Platform } from "@/api/schemas";
 import { DataState } from "@/components/data-state";
 import { MatchTeamTable } from "@/components/match-team-table";
 import { ReplaySection } from "@/components/replay-section";
@@ -34,7 +34,7 @@ export function MatchDetailClient({
   locale: Locale;
   matchId: string;
   puuid: string;
-  platform: "NA1";
+  platform: Platform;
 }) {
   const messages = getMessages(locale);
   const [state, setState] = useState<RequestState<MatchDetailResponse>>({ status: "loading" });

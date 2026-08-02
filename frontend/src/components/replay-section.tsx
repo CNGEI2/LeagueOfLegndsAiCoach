@@ -12,7 +12,7 @@ import {
   retryReplay,
   uploadReplayContent,
 } from "@/api/client";
-import type { ReplayArtifact, ReplayStatusResponse } from "@/api/schemas";
+import type { Platform, ReplayArtifact, ReplayStatusResponse } from "@/api/schemas";
 import { ReplayArtifactGallery } from "@/components/replay-artifact-gallery";
 import { ReplayStatusPanel } from "@/components/replay-status-panel";
 import { ReplayUploadForm, type ReplayUploadSubmit } from "@/components/replay-upload-form";
@@ -109,7 +109,7 @@ export function ReplaySection({
 }: {
   matchId: string;
   puuid: string;
-  platform: "NA1";
+  platform: Platform;
   locale: Locale;
   matchDurationSeconds: number;
 }) {
