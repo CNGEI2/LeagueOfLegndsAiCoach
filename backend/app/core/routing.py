@@ -46,6 +46,9 @@ class RiotRoutes:
     display_name_zh: str
     display_name_en: str
     sort_order: int
+    # PH2/TH2 merged into SG2 (2025-01-08); keep enum/display values but do not
+    # probe dead platform hosts during automatic detection.
+    include_in_detection_probe: bool = True
 
     @property
     def regional_host(self) -> str:
@@ -132,10 +135,11 @@ _ROUTES: dict[Platform, RiotRoutes] = {
     ),
     Platform.PH2: RiotRoutes(
         region=Region.SEA,
-        platform_host="ph2.api.riotgames.com",
+        platform_host="sg2.api.riotgames.com",
         display_name_zh="菲律宾服",
         display_name_en="Philippines",
         sort_order=120,
+        include_in_detection_probe=False,
     ),
     Platform.SG2: RiotRoutes(
         region=Region.SEA,
@@ -146,10 +150,11 @@ _ROUTES: dict[Platform, RiotRoutes] = {
     ),
     Platform.TH2: RiotRoutes(
         region=Region.SEA,
-        platform_host="th2.api.riotgames.com",
+        platform_host="sg2.api.riotgames.com",
         display_name_zh="泰国服",
         display_name_en="Thailand",
         sort_order=140,
+        include_in_detection_probe=False,
     ),
     Platform.TW2: RiotRoutes(
         region=Region.SEA,
@@ -180,6 +185,14 @@ def regional_host_for(region: Region) -> str:
 def ordered_platforms() -> tuple[Platform, ...]:
     return tuple(
         platform for platform, _ in sorted(ROUTES.items(), key=lambda item: item[1].sort_order)
+    )
+
+
+def detection_probe_platforms() -> tuple[Platform, ...]:
+    return tuple(
+        platform
+        for platform in ordered_platforms()
+        if routes_for(platform).include_in_detection_probe
     )
 
 

@@ -16,7 +16,13 @@ from app.core.errors import (
 )
 from app.core.metrics import MetricsRegistry
 from app.core.metrics import metrics as default_metrics
-from app.core.routing import Platform, Region, display_name_for, ordered_platforms
+from app.core.routing import (
+    Platform,
+    Region,
+    detection_probe_platforms,
+    display_name_for,
+    ordered_platforms,
+)
 from app.repositories.platform_detections import (
     DetectionStatus,
     PlatformDetectionRecord,
@@ -297,7 +303,7 @@ class PlatformDetectionService:
     async def _probe_platforms(self, puuid: str) -> tuple[Platform, ...]:
         tasks = [
             asyncio.create_task(self._probe_platform(platform, puuid))
-            for platform in ordered_platforms()
+            for platform in detection_probe_platforms()
         ]
         try:
             probed = await asyncio.gather(*tasks)

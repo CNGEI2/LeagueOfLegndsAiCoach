@@ -7,6 +7,7 @@ from app.core.routing import (
     ROUTES,
     Platform,
     Region,
+    detection_probe_platforms,
     display_name_for,
     ordered_platforms,
     regional_host_for,
@@ -45,9 +46,9 @@ CATALOG = {
     "OC1": (90, "SEA", "oc1.api.riotgames.com", "大洋洲服", "Oceania"),
     "TR1": (100, "EUROPE", "tr1.api.riotgames.com", "土耳其服", "Türkiye"),
     "RU": (110, "EUROPE", "ru.api.riotgames.com", "俄服", "Russia"),
-    "PH2": (120, "SEA", "ph2.api.riotgames.com", "菲律宾服", "Philippines"),
+    "PH2": (120, "SEA", "sg2.api.riotgames.com", "菲律宾服", "Philippines"),
     "SG2": (130, "SEA", "sg2.api.riotgames.com", "新加坡服", "Singapore"),
-    "TH2": (140, "SEA", "th2.api.riotgames.com", "泰国服", "Thailand"),
+    "TH2": (140, "SEA", "sg2.api.riotgames.com", "泰国服", "Thailand"),
     "TW2": (150, "SEA", "tw2.api.riotgames.com", "台服", "Taiwan"),
     "VN2": (160, "SEA", "vn2.api.riotgames.com", "越南服", "Vietnam"),
 }
@@ -101,6 +102,19 @@ def test_sort_orders_are_unique_and_stable() -> None:
     sort_orders = [routes_for(platform).sort_order for platform in platforms]
     assert sort_orders == sorted(sort_orders)
     assert len(set(sort_orders)) == len(sort_orders)
+
+
+def test_merged_sea_platforms_alias_sg2_host_and_skip_detection_probes() -> None:
+    assert routes_for(Platform.PH2).platform_host == "sg2.api.riotgames.com"
+    assert routes_for(Platform.TH2).platform_host == "sg2.api.riotgames.com"
+    assert routes_for(Platform.PH2).include_in_detection_probe is False
+    assert routes_for(Platform.TH2).include_in_detection_probe is False
+    assert routes_for(Platform.SG2).include_in_detection_probe is True
+    probe_platforms = detection_probe_platforms()
+    assert Platform.PH2 not in probe_platforms
+    assert Platform.TH2 not in probe_platforms
+    assert Platform.SG2 in probe_platforms
+    assert len(probe_platforms) == len(Platform) - 2
 
 
 def test_regional_host_for_returns_closed_catalog_hosts() -> None:

@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.errors import ApiError
-from app.core.routing import Platform, Region
+from app.core.routing import Platform, Region, detection_probe_platforms
 from app.repositories.platform_detections import DetectionStatus, PlatformDetectionRecord
 from app.schemas.domain import Locale, PlayerView, StaticDataStatus
 from app.services.platform_detection import (
@@ -244,7 +244,7 @@ async def test_expired_cache_performs_fresh_detection() -> None:
 
     assert isinstance(result, ResolvedDetection)
     assert gateway.account_calls == [Region.AMERICAS]
-    assert len(gateway.probe_calls) == len(Platform)
+    assert len(gateway.probe_calls) == len(detection_probe_platforms())
 
 
 @pytest.mark.asyncio
@@ -429,7 +429,7 @@ async def test_detection_single_flight_shares_upstream_work_and_cleans_up() -> N
     assert isinstance(first_result, ResolvedDetection)
     assert isinstance(second_result, ResolvedDetection)
     assert gateway.account_calls == [Region.AMERICAS]
-    assert len(gateway.probe_calls) == len(Platform)
+    assert len(gateway.probe_calls) == len(detection_probe_platforms())
     assert detector._inflight == {}
 
 
