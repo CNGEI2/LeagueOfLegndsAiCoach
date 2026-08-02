@@ -11,9 +11,11 @@ from app.core.errors import ApiError, replay_not_found, replay_too_large
 from app.models.replay import ReplayUploadRow
 from app.repositories.matches import MatchRepository
 from app.repositories.replays import (
+    ReplayActiveJobConflict,
     ReplayArtifactRepository,
     ReplayJobRepository,
     ReplayRepository,
+    ReplayStateConflict,
 )
 from app.schemas.replays import (
     ReplayArtifactAccess,
@@ -336,8 +338,14 @@ class ReplayService:
             if status == ReplayStatus.CREATED and self._settings.replay_storage_backend == "s3":
                 # The client uploaded directly to S3 under a temporary key; promote
                 # it to the real source key now that we are ready to validate it.
+                # A request can be retried after that copy/delete succeeded but
+                # before its CREATED -> UPLOADED transition committed; in that
+                # case the temporary key is gone while the final key is valid.
                 temp_key = temp_upload_key(row.source_object_key)
-                stored = await self._storage.promote(temp_key, row.source_object_key)
+                try:
+                    stored = await self._storage.promote(temp_key, row.source_object_key)
+                except ReplayObjectNotFound:
+                    stored = await self._storage.stat(row.source_object_key)
             else:
                 stored = await self._storage.stat(row.source_object_key)
         except ReplayObjectNotFound as error:
@@ -371,30 +379,43 @@ class ReplayService:
             )
 
         if status == ReplayStatus.CREATED:
-            row = await self._replay_repository.transition(
+            try:
+                row = await self._replay_repository.transition(
+                    replay_id=row.id,
+                    expected_statuses={ReplayStatus.CREATED},
+                    expected_version=row.version,
+                    status=ReplayStatus.UPLOADED,
+                    values={
+                        "actual_size_bytes": stored.size_bytes,
+                        "source_sha256": stored.sha256,
+                        "updated_at": clock,
+                    },
+                )
+            except ReplayStateConflict:
+                row = await self._authorize(replay_id, token)
+                if ReplayStatus(row.status) in _COMPLETE_IDEMPOTENT_STATUSES:
+                    return _status_data(row)
+                if ReplayStatus(row.status) != ReplayStatus.UPLOADED:
+                    raise replay_not_found() from None
+
+        try:
+            updated = await self._replay_repository.queue_process_job(
                 replay_id=row.id,
-                expected_statuses={ReplayStatus.CREATED},
+                expected_statuses={ReplayStatus.UPLOADED},
                 expected_version=row.version,
-                status=ReplayStatus.UPLOADED,
+                status=ReplayStatus.QUEUED,
                 values={
                     "actual_size_bytes": stored.size_bytes,
                     "source_sha256": stored.sha256,
                     "updated_at": clock,
                 },
+                available_at=clock,
             )
-
-        updated = await self._replay_repository.queue_process_job(
-            replay_id=row.id,
-            expected_statuses={ReplayStatus.UPLOADED},
-            expected_version=row.version,
-            status=ReplayStatus.QUEUED,
-            values={
-                "actual_size_bytes": stored.size_bytes,
-                "source_sha256": stored.sha256,
-                "updated_at": clock,
-            },
-            available_at=clock,
-        )
+        except (ReplayActiveJobConflict, ReplayStateConflict):
+            latest = await self._authorize(replay_id, token)
+            if ReplayStatus(latest.status) in _COMPLETE_IDEMPOTENT_STATUSES:
+                return _status_data(latest)
+            raise
         return _status_data(updated)
 
     async def get_status(
@@ -410,7 +431,11 @@ class ReplayService:
         clock = now or datetime.now(UTC)
         row = await self._authorize(replay_id, token)
         status = ReplayStatus(row.status)
-        if status in {ReplayStatus.DELETING, ReplayStatus.DELETED, ReplayStatus.EXPIRED}:
+        # Frames are persisted incrementally while extraction runs. They are
+        # not a public artifact set until the replay's final READY transition;
+        # otherwise a direct/presigned link could expose partial output that
+        # may still be superseded or removed after a processing failure.
+        if status != ReplayStatus.READY:
             raise replay_not_found()
 
         expires_at = clock + _ARTIFACT_ACCESS_TTL
@@ -502,20 +527,31 @@ class ReplayService:
                 retryable=True,
             ) from error
 
-        updated = await self._replay_repository.queue_process_job(
-            replay_id=row.id,
-            expected_statuses={ReplayStatus.FAILED},
-            expected_version=row.version,
-            status=ReplayStatus.QUEUED,
-            values={
-                "error_code": None,
-                "error_retryable": None,
-                "processing_stage": None,
-                "progress_percent": 0,
-                "updated_at": clock,
-            },
-            available_at=clock,
-        )
+        try:
+            updated = await self._replay_repository.queue_process_job(
+                replay_id=row.id,
+                expected_statuses={ReplayStatus.FAILED},
+                expected_version=row.version,
+                status=ReplayStatus.QUEUED,
+                values={
+                    "error_code": None,
+                    "error_retryable": None,
+                    "processing_stage": None,
+                    "progress_percent": 0,
+                    "updated_at": clock,
+                },
+                available_at=clock,
+            )
+        except ReplayActiveJobConflict as error:
+            # A legacy FAILED replay can still have a retry-scheduled PROCESS
+            # job from before the state invariant was enforced. Preserve that
+            # job and report the documented retry conflict, never a 500.
+            raise ApiError(
+                status_code=409,
+                code="REPLAY_RETRY_NOT_ALLOWED",
+                message="This replay cannot be retried.",
+                retryable=False,
+            ) from error
         return _status_data(updated)
 
     async def request_delete(

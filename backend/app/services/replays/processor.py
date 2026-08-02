@@ -479,6 +479,15 @@ class ReplayProcessor:
     async def _handle_process_failure(self, job: ReplayJobRow, error: Exception) -> None:
         now = self._clock()
         code, retryable = classify_process_error(error)
+        # Settle the worker-owned job first so the replay state reflects the
+        # durable outcome: an active automatic retry is QUEUED, while only a
+        # terminal job failure exposes FAILED to the manual-retry endpoint.
+        await self._fail_job(job, error=error, retryable=retryable, now=now, code=code)
+        replay_status = (
+            ReplayStatus.QUEUED
+            if job.status == ReplayJobStatus.RETRY_SCHEDULED.value
+            else ReplayStatus.FAILED
+        )
         try:
             row = await self._replays.get(job.replay_id)
             if row is not None and ReplayStatus(row.status) != ReplayStatus.DELETING:
@@ -492,12 +501,16 @@ class ReplayProcessor:
                         ReplayStatus.FAILED,
                     },
                     expected_version=row.version,
-                    status=ReplayStatus.FAILED,
+                    status=replay_status,
                     values={
-                        "processing_stage": "failed",
+                        "processing_stage": "queued"
+                        if replay_status == ReplayStatus.QUEUED
+                        else "failed",
                         "error_code": code,
                         "error_retryable": retryable,
-                        "processing_finished_at": now,
+                        "processing_finished_at": None
+                        if replay_status == ReplayStatus.QUEUED
+                        else now,
                         "source_delete_after": now
                         + timedelta(hours=self._settings.replay_source_retention_hours),
                         "updated_at": now,
@@ -511,7 +524,6 @@ class ReplayProcessor:
                 return
 
         self._metrics.replay_processing_failures_total.inc(error_code=code)
-        await self._fail_job(job, error=error, retryable=retryable, now=now, code=code)
 
     async def _fail_job(
         self,

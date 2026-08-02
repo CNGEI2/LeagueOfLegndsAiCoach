@@ -78,6 +78,7 @@ async def run_worker(
         heartbeat_before=now - _STALE_HEARTBEAT,
         available_at=now + timedelta(seconds=1),
         now=now,
+        source_delete_after=now + timedelta(hours=settings.replay_source_retention_hours),
     )
 
     retention_task = asyncio.create_task(
@@ -106,10 +107,12 @@ async def run_worker(
     try:
         await stop_event.wait()
     finally:
-        for task in consumers:
-            task.cancel()
         retention_task.cancel()
-        await asyncio.gather(*consumers, retention_task, return_exceptions=True)
+        await asyncio.gather(retention_task, return_exceptions=True)
+        # Do not cancel consumers here. A SIGTERM must stop new claims while
+        # allowing an already-dispatched ffmpeg job to finish; Docker's
+        # stop_grace_period remains the hard outer bound for a stuck process.
+        await asyncio.gather(*consumers, return_exceptions=True)
         await db.close()
 
 
@@ -165,22 +168,24 @@ async def _consumer_loop(
             break
         job = await jobs.claim_next(worker_id=worker_id, now=now_factory())
         if job is None:
-            await asyncio.sleep(idle_backoff_seconds)
+            await _wait_for_stop(stop_event, idle_backoff_seconds)
             continue
 
+        job_finished = asyncio.Event()
         heartbeat_task = asyncio.create_task(
             _heartbeat_loop(
                 jobs,
                 job_id=job.id,
                 worker_id=worker_id,
                 interval_seconds=heartbeat_interval_seconds,
-                stop_event=stop_event,
+                job_finished=job_finished,
                 now_factory=now_factory,
             )
         )
         try:
             await _dispatch(processor, job)
         finally:
+            job_finished.set()
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
 
@@ -203,12 +208,12 @@ async def _heartbeat_loop(
     job_id: UUID,
     worker_id: str,
     interval_seconds: float,
-    stop_event: asyncio.Event,
+    job_finished: asyncio.Event,
     now_factory: Callable[[], datetime],
 ) -> None:
-    while not stop_event.is_set():
+    while not job_finished.is_set():
         await asyncio.sleep(interval_seconds)
-        if stop_event.is_set():
+        if job_finished.is_set():
             break
         await jobs.heartbeat(job_id, worker_id=worker_id, now=now_factory())
 
@@ -222,7 +227,23 @@ async def _retention_loop(
 ) -> None:
     while not stop_event.is_set():
         await jobs.enqueue_due_retention(now_factory())
-        await asyncio.sleep(interval_seconds)
+        await _wait_for_stop(stop_event, interval_seconds)
+
+
+async def _wait_for_stop(stop_event: asyncio.Event, timeout_seconds: float) -> None:
+    """Sleep until the next interval or return immediately during shutdown."""
+    if stop_event.is_set():
+        return
+    stop_waiter = asyncio.create_task(stop_event.wait())
+    sleeper = asyncio.create_task(asyncio.sleep(timeout_seconds))
+    done, pending = await asyncio.wait(
+        {stop_waiter, sleeper},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    del done
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def _amain(argv: list[str] | None = None) -> None:

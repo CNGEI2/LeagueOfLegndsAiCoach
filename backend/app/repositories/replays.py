@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, case, delete, or_, select, true, update
+from sqlalchemy import ColumnElement, and_, delete, or_, select, true, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -43,6 +43,10 @@ _SENSITIVE_SCRUB_FIELDS = (
 
 class ReplayStateConflict(Exception):
     """Optimistic replay state/version precondition failed."""
+
+
+class ReplayActiveJobConflict(Exception):
+    """A replay already has an active job of the requested kind."""
 
 
 class ReplayArtifactConflict(Exception):
@@ -121,6 +125,7 @@ class ReplayJobRepository(Protocol):
         heartbeat_before: datetime,
         available_at: datetime,
         now: datetime,
+        source_delete_after: datetime | None = None,
     ) -> int: ...
 
     async def enqueue_due_retention(self, now: datetime) -> int: ...
@@ -237,7 +242,12 @@ class SqlReplayRepository:
             if row is None:
                 raise ReplayStateConflict("replay state or version precondition failed")
             session.add(job_row)
-            await session.flush()
+            try:
+                await session.flush()
+            except IntegrityError as error:
+                if _is_active_job_integrity_error(error):
+                    raise ReplayActiveJobConflict("an active process job already exists") from error
+                raise
             session.expunge(row)
             return row
 
@@ -458,45 +468,63 @@ class SqlReplayJobRepository:
         heartbeat_before: datetime,
         available_at: datetime,
         now: datetime,
+        source_delete_after: datetime | None = None,
     ) -> int:
-        """Unstick jobs whose worker stopped heartbeating.
+        """Recover stale jobs and reconcile their PROCESS replay state.
 
-        A job still under its retry budget (`attempt_count < max_attempts`)
-        is rescheduled for another attempt. A job that has already exhausted
-        its attempts must be marked FAILED here instead: silently retrying
-        it forever would bypass the max_attempts budget that `fail()` (the
-        normal failure path) already enforces.
+        Job recovery and the corresponding replay transition share a
+        transaction: a replay cannot remain transcoding/extracting after its
+        only PROCESS job became retry-scheduled or terminally failed.
         """
-        can_retry = ReplayJobRow.attempt_count < ReplayJobRow.max_attempts
         statement = (
-            update(ReplayJobRow)
+            select(ReplayJobRow)
             .where(
                 ReplayJobRow.status == ReplayJobStatus.RUNNING.value,
                 ReplayJobRow.heartbeat_at.is_not(None),
                 ReplayJobRow.heartbeat_at < heartbeat_before,
             )
-            .values(
-                status=case(
-                    (can_retry, ReplayJobStatus.RETRY_SCHEDULED.value),
-                    else_=ReplayJobStatus.FAILED.value,
-                ),
-                worker_id=None,
-                claimed_at=None,
-                heartbeat_at=None,
-                available_at=case(
-                    (can_retry, available_at),
-                    else_=ReplayJobRow.available_at,
-                ),
-                finished_at=case(
-                    (can_retry, None),
-                    else_=now,
-                ),
-                updated_at=now,
-            )
+            .with_for_update(skip_locked=True)
         )
         async with self._session_factory.begin() as session:
-            result = await session.execute(statement)
-        return _rowcount(result)
+            jobs = list((await session.execute(statement)).scalars())
+            for job in jobs:
+                replay = await session.get(
+                    ReplayUploadRow,
+                    job.replay_id,
+                    with_for_update=True,
+                )
+                if (
+                    job.kind == ReplayJobKind.PROCESS.value
+                    and replay is not None
+                    and replay.status in {ReplayStatus.DELETING.value, ReplayStatus.DELETED.value}
+                ):
+                    job.status = ReplayJobStatus.CANCELLED.value
+                    job.finished_at = now
+                else:
+                    can_retry = job.attempt_count < job.max_attempts
+                    job.status = (
+                        ReplayJobStatus.RETRY_SCHEDULED.value
+                        if can_retry
+                        else ReplayJobStatus.FAILED.value
+                    )
+                    job.available_at = available_at if can_retry else job.available_at
+                    job.finished_at = None if can_retry else now
+
+                    if job.kind == ReplayJobKind.PROCESS.value and replay is not None:
+                        _sync_replay_after_stale_process_job(
+                            replay,
+                            retry_scheduled=can_retry,
+                            now=now,
+                            source_delete_after=source_delete_after,
+                        )
+
+                job.last_error_code = "REPLAY_WORKER_STALE"
+                job.worker_id = None
+                job.claimed_at = None
+                job.heartbeat_at = None
+                job.updated_at = now
+            await session.flush()
+        return len(jobs)
 
     async def enqueue_due_retention(self, now: datetime) -> int:
         created = 0
@@ -673,5 +701,34 @@ def _new_job(
     )
 
 
+def _sync_replay_after_stale_process_job(
+    replay: ReplayUploadRow,
+    *,
+    retry_scheduled: bool,
+    now: datetime,
+    source_delete_after: datetime | None,
+) -> None:
+    """Mirror stale PROCESS job recovery onto its replay lifecycle row."""
+    replay.status = ReplayStatus.QUEUED.value if retry_scheduled else ReplayStatus.FAILED.value
+    replay.processing_stage = "queued" if retry_scheduled else "failed"
+    replay.error_code = "REPLAY_WORKER_STALE"
+    replay.error_retryable = True
+    replay.processing_finished_at = None if retry_scheduled else now
+    if not retry_scheduled and source_delete_after is not None:
+        replay.source_delete_after = source_delete_after
+    replay.updated_at = now
+    replay.version += 1
+
+
 def _rowcount(result: object) -> int:
     return cast(CursorResult[object], result).rowcount
+
+
+def _is_active_job_integrity_error(error: IntegrityError) -> bool:
+    """Restrict conflict recovery to the active-job partial unique index.
+
+    Other integrity failures still represent unexpected persistence failures
+    and must retain their original error path rather than being mislabeled as
+    a retry conflict.
+    """
+    return "uq_replay_active_job" in str(error.orig)

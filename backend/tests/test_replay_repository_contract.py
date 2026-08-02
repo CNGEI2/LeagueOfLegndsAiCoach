@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -6,6 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.core.config import Settings
 from app.core.routing import Platform
 from app.models.replay import ReplayArtifactRow, ReplayJobRow, ReplayUploadRow
 from app.repositories.matches import SqlMatchRepository
@@ -23,8 +25,56 @@ from app.services.replays.domain import (
     ReplayJobStatus,
     ReplayStatus,
 )
+from app.services.replays.security import issue_replay_token
+from app.services.replays.service import ReplayService
+from app.services.replays.storage.base import ReplayObjectNotFound, StoredObject
 
 pytestmark = pytest.mark.integration
+
+
+@dataclass
+class CompleteStorage:
+    objects: dict[str, StoredObject] = field(default_factory=dict)
+    promote_calls: list[tuple[str, str]] = field(default_factory=list)
+
+    async def promote(self, temp_key: str, final_key: str) -> StoredObject:
+        self.promote_calls.append((temp_key, final_key))
+        # Force competing complete() calls to observe the same source state.
+        await asyncio.sleep(0)
+        source = self.objects.pop(temp_key, None)
+        if source is None:
+            raise ReplayObjectNotFound(temp_key)
+        final = StoredObject(key=final_key, size_bytes=source.size_bytes, sha256=source.sha256)
+        self.objects[final_key] = final
+        return final
+
+    async def stat(self, key: str) -> StoredObject:
+        stored = self.objects.get(key)
+        if stored is None:
+            raise ReplayObjectNotFound(key)
+        return stored
+
+
+def _replay_service(
+    session_factory,
+    storage: CompleteStorage,
+    *,
+    storage_backend: str,
+) -> ReplayService:
+    return ReplayService(
+        settings=Settings(
+            _env_file=None,
+            app_env="test",
+            replay_enabled=True,
+            replay_token_secret="x" * 32,
+            replay_storage_backend=storage_backend,  # type: ignore[arg-type]
+        ),
+        match_repository=object(),  # type: ignore[arg-type]
+        replay_repository=SqlReplayRepository(session_factory),
+        job_repository=SqlReplayJobRepository(session_factory),
+        artifact_repository=SqlReplayArtifactRepository(session_factory),
+        storage=storage,  # type: ignore[arg-type]
+    )
 
 
 def _now() -> datetime:
@@ -221,7 +271,7 @@ async def test_duplicate_active_job_enqueue_is_blocked(session_factory) -> None:
     now = _now()
     replays = SqlReplayRepository(session_factory)
     jobs = SqlReplayJobRepository(session_factory)
-    replay = await replays.create(make_replay())
+    replay = await replays.create(make_replay(status=ReplayStatus.EXTRACTING.value))
     await jobs.enqueue(
         replay_id=replay.id,
         kind=ReplayJobKind.PROCESS,
@@ -354,7 +404,7 @@ async def test_recover_stale_reschedules_expired_running_jobs(session_factory) -
     now = _now()
     replays = SqlReplayRepository(session_factory)
     jobs = SqlReplayJobRepository(session_factory)
-    replay = await replays.create(make_replay())
+    replay = await replays.create(make_replay(status=ReplayStatus.TRANSCODING.value))
     claimed_at = now - timedelta(minutes=10)
     await jobs.enqueue(
         replay_id=replay.id,
@@ -375,11 +425,50 @@ async def test_recover_stale_reschedules_expired_running_jobs(session_factory) -
         row = (
             await session.execute(select(ReplayJobRow).where(ReplayJobRow.id == claimed.id))
         ).scalar_one()
+        replay_row = (
+            await session.execute(select(ReplayUploadRow).where(ReplayUploadRow.id == replay.id))
+        ).scalar_one()
     assert row.status == ReplayJobStatus.RETRY_SCHEDULED.value
     assert row.worker_id is None
     assert row.claimed_at is None
     assert row.heartbeat_at is None
     assert row.available_at == available_at
+    assert replay_row.status == ReplayStatus.QUEUED.value
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_does_not_recover_old_process_with_fresh_heartbeat(
+    session_factory,
+) -> None:
+    """A long drain is safe when its heartbeat remains newer than the cutoff."""
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    replay = await replays.create(make_replay(status=ReplayStatus.TRANSCODING.value))
+    claimed_at = now - timedelta(seconds=61)
+    await jobs.enqueue(
+        replay_id=replay.id,
+        kind=ReplayJobKind.PROCESS,
+        available_at=claimed_at,
+    )
+    claimed = await jobs.claim_next(worker_id="draining-worker", now=claimed_at)
+    assert claimed is not None
+
+    fresh_heartbeat = now + timedelta(seconds=1)
+    await jobs.heartbeat(claimed.id, worker_id="draining-worker", now=fresh_heartbeat)
+    recovered = await jobs.recover_stale(
+        heartbeat_before=now,
+        available_at=fresh_heartbeat + timedelta(seconds=1),
+        now=fresh_heartbeat,
+    )
+
+    assert recovered == 0
+    async with session_factory() as session:
+        job_row = (
+            await session.execute(select(ReplayJobRow).where(ReplayJobRow.id == claimed.id))
+        ).scalar_one()
+    assert job_row.status == ReplayJobStatus.RUNNING.value
+    assert job_row.heartbeat_at == fresh_heartbeat
 
 
 @pytest.mark.asyncio
@@ -407,17 +496,128 @@ async def test_recover_stale_marks_failed_instead_of_retrying_when_max_attempts_
         heartbeat_before=now - timedelta(minutes=5),
         available_at=available_at,
         now=now,
+        source_delete_after=now + timedelta(hours=24),
     )
     assert recovered == 1
     async with session_factory() as session:
         row = (
             await session.execute(select(ReplayJobRow).where(ReplayJobRow.id == claimed.id))
         ).scalar_one()
+        replay_row = (
+            await session.execute(select(ReplayUploadRow).where(ReplayUploadRow.id == replay.id))
+        ).scalar_one()
     assert row.status == ReplayJobStatus.FAILED.value
     assert row.finished_at == now
     assert row.worker_id is None
     assert row.claimed_at is None
     assert row.heartbeat_at is None
+    assert replay_row.status == ReplayStatus.FAILED.value
+    assert replay_row.error_code == "REPLAY_WORKER_STALE"
+    assert replay_row.error_retryable is True
+    assert replay_row.source_delete_after == now + timedelta(hours=24)
+
+
+@pytest.mark.asyncio
+async def test_stale_failed_replay_can_be_manually_retried_within_source_retention(
+    session_factory,
+) -> None:
+    """Worker stale recovery must retain the source needed by ReplayService.retry."""
+    now = _now()
+    token, digest = issue_replay_token(b"x" * 32)
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    source_key = f"source/{uuid4()}/input"
+    replay = await replays.create(
+        make_replay(
+            status=ReplayStatus.EXTRACTING.value,
+            token_digest=digest,
+            source_object_key=source_key,
+        )
+    )
+    await jobs.enqueue(
+        replay_id=replay.id,
+        kind=ReplayJobKind.PROCESS,
+        available_at=now - timedelta(minutes=10),
+        max_attempts=1,
+    )
+    claimed = await jobs.claim_next(worker_id="stale-worker", now=now - timedelta(minutes=10))
+    assert claimed is not None
+    source_delete_after = now + timedelta(hours=24)
+    await jobs.recover_stale(
+        heartbeat_before=now - timedelta(minutes=5),
+        available_at=now + timedelta(seconds=1),
+        now=now,
+        source_delete_after=source_delete_after,
+    )
+    storage = CompleteStorage(
+        objects={source_key: StoredObject(key=source_key, size_bytes=100, sha256="a" * 64)}
+    )
+    service = _replay_service(session_factory, storage, storage_backend="local")
+
+    retried = await service.retry(replay.id, token, now=now + timedelta(seconds=1))
+
+    assert retried.status == ReplayStatus.QUEUED
+    async with session_factory() as session:
+        replay_row = (
+            await session.execute(select(ReplayUploadRow).where(ReplayUploadRow.id == replay.id))
+        ).scalar_one()
+        process_jobs = list(
+            (
+                await session.execute(
+                    select(ReplayJobRow).where(
+                        ReplayJobRow.replay_id == replay.id,
+                        ReplayJobRow.kind == ReplayJobKind.PROCESS.value,
+                    )
+                )
+            ).scalars()
+        )
+    assert replay_row.status == ReplayStatus.QUEUED.value
+    assert replay_row.source_delete_after == source_delete_after
+    assert [job.status for job in process_jobs].count(ReplayJobStatus.PENDING.value) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_s3_complete_calls_both_succeed_and_enqueue_one_process_job(
+    session_factory,
+) -> None:
+    """PostgreSQL optimistic conflicts must resolve to the queued result."""
+    now = _now()
+    token, digest = issue_replay_token(b"x" * 32)
+    replays = SqlReplayRepository(session_factory)
+    replay = await replays.create(
+        make_replay(
+            status=ReplayStatus.CREATED.value,
+            token_digest=digest,
+            source_object_key=f"source/{uuid4()}/input",
+        )
+    )
+    assert replay.source_object_key is not None
+    temp_key = f"tmp/{replay.source_object_key}"
+    storage = CompleteStorage(
+        objects={temp_key: StoredObject(key=temp_key, size_bytes=100, sha256="a" * 64)}
+    )
+    service = _replay_service(session_factory, storage, storage_backend="s3")
+
+    first, second = await asyncio.gather(
+        service.complete(replay.id, token, now=now),
+        service.complete(replay.id, token, now=now),
+    )
+
+    assert first.status == ReplayStatus.QUEUED
+    assert second.status == ReplayStatus.QUEUED
+    async with session_factory() as session:
+        jobs = list(
+            (
+                await session.execute(
+                    select(ReplayJobRow).where(
+                        ReplayJobRow.replay_id == replay.id,
+                        ReplayJobRow.kind == ReplayJobKind.PROCESS.value,
+                    )
+                )
+            ).scalars()
+        )
+    assert len(jobs) == 1
+    assert jobs[0].status == ReplayJobStatus.PENDING.value
 
 
 @pytest.mark.asyncio

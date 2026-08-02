@@ -239,7 +239,10 @@ def test_progress_maps_out_time_ms_to_stage_15_80() -> None:
     assert progress_percent_from_out_time(0, 10_000) == 15
     assert progress_percent_from_out_time(10_000, 10_000) == 80
     assert 15 < progress_percent_from_out_time(5_000, 10_000) < 80
-    assert parse_progress_out_time_ms("out_time_ms=2500\n") == 2500
+    # Despite its historical name, FFmpeg writes this field in microseconds
+    # (the same unit as out_time_us). Interpreting it as milliseconds jumps
+    # progress to 80% almost immediately for ordinary videos.
+    assert parse_progress_out_time_ms("out_time_ms=2500000\n") == 2500
     assert parse_progress_out_time_ms("bitrate=1.2kbits/s\n") is None
 
 
@@ -377,7 +380,11 @@ async def test_normalize_reports_progress_from_out_time_ms(tmp_path: Path) -> No
             FakeProcessResult(returncode=0, stdout=b""),
             FakeProcessResult(returncode=0, stdout=normalized_probe),
         ],
-        on_stdout_chunks=[b"out_time_ms=0\n", b"out_time_ms=5000\n", b"out_time_ms=10000\n"],
+        on_stdout_chunks=[
+            b"out_time_ms=0\n",
+            b"out_time_ms=5000000\n",
+            b"out_time_ms=10000000\n",
+        ],
     )
     ticking_clock = {"value": 0.0}
 

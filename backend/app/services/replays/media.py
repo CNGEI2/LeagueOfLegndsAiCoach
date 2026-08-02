@@ -287,14 +287,14 @@ def parse_progress_out_time_ms(line: str) -> int | None:
 
     ffmpeg's `-progress` stream emits several time-carrying keys; supporting
     all of them makes parsing robust across ffmpeg versions/builds:
-      - `out_time_ms=<milliseconds>`
+      - `out_time_ms=<microseconds>` (historical field name)
       - `out_time_us=<microseconds>` (converted to milliseconds)
       - `out_time=HH:MM:SS.micro` (converted to milliseconds)
     """
     if line.startswith("out_time_ms="):
         raw = line.split("=", 1)[1].strip()
         try:
-            return int(raw)
+            return int(raw) // 1000
         except ValueError:
             return None
     if line.startswith("out_time_us="):

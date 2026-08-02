@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -51,6 +51,7 @@ class FakeJobRepository:
     events: list[str] = field(default_factory=list)
     claim_results: list[ReplayJobRow | None] = field(default_factory=list)
     heartbeats: list[UUID] = field(default_factory=list)
+    heartbeat_times: list[datetime] = field(default_factory=list)
     recover_calls: int = 0
     retention_calls: list[datetime] = field(default_factory=list)
     succeeded: list[UUID] = field(default_factory=list)
@@ -65,8 +66,9 @@ class FakeJobRepository:
         return None
 
     async def heartbeat(self, job_id: UUID, *, worker_id: str, now: datetime) -> None:
-        del worker_id, now
+        del worker_id
         self.heartbeats.append(job_id)
+        self.heartbeat_times.append(now)
         self.events.append(f"heartbeat:{job_id}")
 
     async def succeed(self, job_id: UUID, *, now: datetime) -> ReplayJobRow:
@@ -87,8 +89,9 @@ class FakeJobRepository:
         heartbeat_before: datetime,
         available_at: datetime,
         now: datetime,
+        source_delete_after: datetime | None = None,
     ) -> int:
-        del heartbeat_before, available_at, now
+        del heartbeat_before, available_at, now, source_delete_after
         self.recover_calls += 1
         self.events.append("recover_stale")
         return 0
@@ -243,6 +246,88 @@ async def test_stop_event_stops_claiming_new_jobs(monkeypatch: pytest.MonkeyPatc
 
     assert processor.events.count(f"process:{first.id}") == 1
     assert f"process:{second.id}" not in processor.events
+
+
+@pytest.mark.asyncio
+async def test_stop_event_drains_in_flight_process_before_worker_exits() -> None:
+    """SIGTERM must not cancel the coroutine currently processing a replay."""
+    settings = _settings()
+    job = _job()
+    job.status = ReplayJobStatus.RUNNING.value
+    job.attempt_count = 1
+    jobs = FakeJobRepository(claim_results=[job])
+    processor = FakeProcessor(block_process=True)
+    database = FakeDatabase()
+    stop = asyncio.Event()
+
+    worker = asyncio.create_task(
+        replay_worker.run_worker(
+            settings,
+            stop,
+            database=database,
+            job_repository=jobs,
+            processor=processor,
+            idle_backoff_seconds=60,
+            heartbeat_interval_seconds=60,
+            retention_interval_seconds=3600,
+            now_factory=lambda: NOW,
+        )
+    )
+    await processor.process_started.wait()
+
+    stop.set()
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(worker), timeout=0.01)
+
+    assert not worker.done()
+    assert processor.process_release.is_set() is False
+
+    processor.process_release.set()
+    await worker
+
+    assert database.closed is True
+
+
+@pytest.mark.asyncio
+async def test_draining_job_keeps_heartbeating_after_stop_past_stale_threshold() -> None:
+    """A draining job must remain fresh even after the normal stale window."""
+    settings = _settings()
+    job = _job()
+    job.status = ReplayJobStatus.RUNNING.value
+    job.attempt_count = 1
+    jobs = FakeJobRepository(claim_results=[job])
+    processor = FakeProcessor(block_process=True)
+    database = FakeDatabase()
+    stop = asyncio.Event()
+    current = NOW
+
+    def now_factory() -> datetime:
+        return current
+
+    worker = asyncio.create_task(
+        replay_worker.run_worker(
+            settings,
+            stop,
+            database=database,
+            job_repository=jobs,
+            processor=processor,
+            idle_backoff_seconds=60,
+            heartbeat_interval_seconds=0.01,
+            retention_interval_seconds=3600,
+            now_factory=now_factory,
+        )
+    )
+    await processor.process_started.wait()
+
+    stop.set()
+    current = NOW + replay_worker._STALE_HEARTBEAT + timedelta(seconds=1)
+    await asyncio.sleep(0.03)
+
+    assert jobs.heartbeat_times
+    assert jobs.heartbeat_times[-1] > NOW + replay_worker._STALE_HEARTBEAT
+
+    processor.process_release.set()
+    await worker
 
 
 @pytest.mark.asyncio

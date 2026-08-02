@@ -67,13 +67,10 @@ services:
     build: ./backend
     user: "10001:10001"
     read_only: true
-    # Plain tmpfs mounts default to mode 1777 (world-writable, sticky bit),
-    # which is what makes them usable by the non-root `appuser` above without
-    # relying on `uid`/`gid` tmpfs suboptions (support for those varies by
-    # Compose/Engine version).
-    tmpfs:
-      - /tmp:size=12G
-      - /var/tmp:size=512M
+    # A 4GiB source plus its normalized output can exceed memory-backed
+    # tmpfs. `/tmp` is a Docker-managed disk volume (the image's 1777 /tmp
+    # permissions are copied when it is initialized) so appuser can safely
+    # hold the full ffmpeg working set without consuming container memory.
     # Give an in-flight ffmpeg job a real chance to finish before Docker
     # escalates SIGTERM to SIGKILL. The worker's SIGTERM handler stops
     # claiming new jobs but deliberately lets the current job run to
@@ -100,6 +97,7 @@ services:
     command: ["python", "-m", "app.workers.replay"]
     volumes:
       - replay_data:/var/lib/lol-ai-coach/replays
+      - replay_scratch:/tmp
     depends_on:
       db:
         condition: service_healthy
@@ -125,3 +123,4 @@ services:
 volumes:
   postgres_data:
   replay_data:
+  replay_scratch:

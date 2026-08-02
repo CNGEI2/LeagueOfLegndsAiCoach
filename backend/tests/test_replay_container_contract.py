@@ -71,41 +71,28 @@ def test_backend_image_runs_as_a_non_root_user() -> None:
     assert REPLAY_MOUNT in dockerfile
 
 
-def _tmpfs_size_bytes(worker: str, mount: str) -> int:
-    match = re.search(rf"{re.escape(mount)}:size=(\d+)([A-Za-z]*)", worker)
-    assert match is not None, f"no tmpfs size found for {mount!r}"
-    value, unit = match.groups()
-    multipliers = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}
-    return int(value) * multipliers[unit.upper().rstrip("B")]
-
-
 def test_worker_hardened_with_read_only_root_and_writable_scratch() -> None:
-    """The worker's root filesystem is read-only; scratch space comes from tmpfs."""
+    """The worker's root filesystem is read-only; video scratch is disk-backed."""
     compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text()
     worker = _service_block(compose, "replay-worker")
 
     assert re.search(r"user:\s*[\"']?\d+:\d+[\"']?", worker) is not None
     assert re.search(r"read_only:\s*true", worker) is not None
-    assert re.search(r"tmpfs:", worker) is not None
-    assert re.search(r"/tmp:size=\d+[A-Za-z]", worker) is not None
+    assert "replay_scratch:/tmp" in worker
+    assert "/tmp:size=" not in worker
     # The replay data volume must remain writable despite the read-only root.
     assert f"replay_data:{REPLAY_MOUNT}" in worker
 
 
-def test_worker_tmp_scratch_is_large_enough_for_max_upload_plus_normalized_copy() -> None:
-    """/tmp holds the downloaded source (up to REPLAY_MAX_BYTES, 4GiB by default)
-    plus the normalized output at the same time, so it must be sized well
-    beyond a single upload's worth of scratch space; /var/tmp only needs
-    room for small scratch files and should stay comfortably smaller."""
+def test_worker_video_scratch_uses_a_named_disk_volume() -> None:
+    """A max-size upload plus normalized output cannot safely live in tmpfs."""
     compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text()
     worker = _service_block(compose, "replay-worker")
+    dockerfile = (REPOSITORY_ROOT / "backend" / "Dockerfile").read_text()
 
-    tmp_size = _tmpfs_size_bytes(worker, "/tmp")
-    var_tmp_size = _tmpfs_size_bytes(worker, "/var/tmp")
-
-    ten_gib = 10 * 1024**3
-    assert tmp_size >= ten_gib, "/tmp must be at least 10G to hold source + normalized copies"
-    assert var_tmp_size < tmp_size
+    assert "replay_scratch:" in compose
+    assert "replay_scratch:/tmp" in worker
+    assert "mkdir -p /var/lib/lol-ai-coach/replays" in dockerfile
 
 
 def test_worker_has_a_stop_grace_period_for_draining_in_flight_jobs() -> None:

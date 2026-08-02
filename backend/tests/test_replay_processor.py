@@ -743,6 +743,29 @@ async def test_transient_storage_failure_is_retryable_until_third_attempt() -> N
 
 
 @pytest.mark.asyncio
+async def test_automatic_retry_keeps_replay_queued_while_process_job_is_active() -> None:
+    """An active retry-scheduled PROCESS job and a FAILED replay disagree.
+
+    The replay must remain queued until the job exhausts its automatic retry
+    budget; otherwise the public manual-retry route can race that active job.
+    """
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    store = FakeReplayStorage(
+        objects={replay.source_object_key or "": SOURCE_BYTES},
+        fail_upload_times=1,
+    )
+    processor, replay_repo, job_repo, _, _, _, _ = _processor(replay=replay, storage=store)
+    job = _job(replay.id, attempt_count=1)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.RETRY_SCHEDULED.value
+    assert replay_repo.rows[replay.id].status == ReplayStatus.QUEUED.value
+    assert replay_repo.rows[replay.id].error_retryable is True
+
+
+@pytest.mark.asyncio
 async def test_user_delete_mid_process_cancels_at_stage_boundary() -> None:
     replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
     events: list[str] = []

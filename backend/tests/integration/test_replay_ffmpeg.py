@@ -77,9 +77,21 @@ async def test_real_ffmpeg_probe_normalize_and_extract(tmp_path: Path) -> None:
     assert validated.height == 360
     assert validated.has_audio is True
 
-    await runner.normalize(source, normalized, probe, progress=None)
+    progress_values: list[int] = []
+
+    async def on_progress(value: int) -> None:
+        progress_values.append(value)
+
+    await runner.normalize(source, normalized, probe, progress=on_progress)
     assert normalized.is_file()
     assert normalized.stat().st_size > 0
+    # Real ffmpeg reports out_time_ms in microseconds despite the field name.
+    # The callback must receive bounded, monotonic stage percentages rather
+    # than jumping to 80 immediately from a raw microsecond value.
+    assert progress_values
+    assert progress_values[-1] == 80
+    assert all(15 <= value <= 80 for value in progress_values)
+    assert progress_values == sorted(progress_values)
 
     normalized_probe = await runner.probe(normalized)
     assert normalized_probe.video_streams[0].codec_name == "h264"

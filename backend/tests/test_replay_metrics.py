@@ -62,6 +62,37 @@ def test_histogram_observes_into_correct_buckets_and_tracks_sum_count() -> None:
     assert histogram.sum(stage="total") == pytest.approx(23.5)
 
 
+def test_histogram_renders_cumulative_buckets_with_inf_equal_to_count() -> None:
+    """Prometheus histogram bucket samples are already cumulative.
+
+    A second cumulative sum at render time makes the final finite bucket
+    larger than `_count`, which violates the exposition format's histogram
+    semantics and breaks downstream histogram consumers.
+    """
+    registry = MetricsRegistry()
+    registry.replay_processing_duration_seconds = Histogram(
+        "replay_processing_duration_seconds",
+        "test",
+        buckets=(1.0, 5.0, 10.0),
+    )
+    registry.replay_processing_duration_seconds.observe(0.5, stage="total")
+    registry.replay_processing_duration_seconds.observe(3.0, stage="total")
+    registry.replay_processing_duration_seconds.observe(20.0, stage="total")
+
+    rendered = registry.render_prometheus_text().splitlines()
+    samples = {
+        line.rsplit(" ", 1)[0]: float(line.rsplit(" ", 1)[1])
+        for line in rendered
+        if line.startswith("replay_processing_duration_seconds_")
+    }
+
+    assert samples['replay_processing_duration_seconds_bucket{le="1",stage="total"}'] == 1
+    assert samples['replay_processing_duration_seconds_bucket{le="5",stage="total"}'] == 2
+    assert samples['replay_processing_duration_seconds_bucket{le="10",stage="total"}'] == 2
+    assert samples['replay_processing_duration_seconds_bucket{le="+Inf",stage="total"}'] == 3
+    assert samples['replay_processing_duration_seconds_count{stage="total"}'] == 3
+
+
 class IncrementingClock:
     def __init__(self, start: datetime, step: timedelta = timedelta(seconds=1)) -> None:
         self._current = start

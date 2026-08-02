@@ -12,6 +12,7 @@ from app.core.config import Settings
 from app.core.errors import ApiError
 from app.core.routing import Platform
 from app.models.replay import ReplayArtifactRow, ReplayJobRow, ReplayUploadRow
+from app.repositories.replays import ReplayActiveJobConflict
 from app.schemas.domain import MatchSnapshot, ParticipantSnapshot
 from app.schemas.replays import ReplayCreateRequest
 from app.services.replays.domain import (
@@ -198,7 +199,7 @@ class FakeReplayJobRepository:
             }
         ]
         if active:
-            raise AssertionError("active job already exists")
+            raise ReplayActiveJobConflict("active job already exists")
         row = ReplayJobRow(
             id=uuid4(),
             replay_id=replay_id,
@@ -665,6 +666,31 @@ async def test_complete_promotes_temp_object_to_final_key_for_s3_backend() -> No
 
 
 @pytest.mark.asyncio
+async def test_s3_complete_retries_after_promotion_already_reached_final_key() -> None:
+    """A retry can see CREATED after S3 copy succeeded but before DB commit.
+
+    Promotion deletes the temp key, so treating its absence as an invalid
+    upload makes an otherwise-valid `complete` call non-idempotent.
+    """
+    service, _, replay_repo, job_repo, _, storage = _service(
+        settings=_settings(replay_storage_backend="s3")
+    )
+    row, token = await _seed_replay(replay_repo, status=ReplayStatus.CREATED)
+    assert row.source_object_key is not None
+    storage.objects[row.source_object_key] = StoredObject(
+        key=row.source_object_key,
+        size_bytes=1_000_000,
+        sha256="a" * 64,
+    )
+
+    result = await service.complete(row.id, token, now=NOW)
+
+    assert result.status == ReplayStatus.QUEUED
+    assert len(job_repo.jobs) == 1
+    assert storage.promote_calls == [(f"tmp/{row.source_object_key}", row.source_object_key)]
+
+
+@pytest.mark.asyncio
 async def test_complete_rejects_and_cleans_up_when_promoted_object_exceeds_declared_size() -> None:
     service, _, replay_repo, _, _, storage = _service(
         settings=_settings(replay_storage_backend="s3"),
@@ -735,6 +761,42 @@ async def test_retry_requires_failed_retryable_source() -> None:
     with pytest.raises(ApiError) as raised:
         await service.retry(row2.id, token2, now=NOW)
     assert raised.value.code == "REPLAY_RETRY_NOT_ALLOWED"
+
+
+@pytest.mark.asyncio
+async def test_manual_retry_rejects_legacy_failed_replay_with_active_automatic_retry() -> None:
+    """Manual retry must not turn an existing retry-scheduled job into a 500.
+
+    Rows created before the queued-on-auto-retry fix can still be FAILED while
+    their PROCESS job is retry_scheduled. The unique active-job constraint is
+    authoritative, so surface the normal retry conflict without adding a
+    duplicate PROCESS job.
+    """
+    service, _, replay_repo, job_repo, _, storage = _service()
+    row, token = await _seed_replay(
+        replay_repo,
+        status=ReplayStatus.FAILED,
+        error_retryable=True,
+        source_delete_after=NOW + timedelta(hours=1),
+    )
+    assert row.source_object_key is not None
+    storage.objects[row.source_object_key] = StoredObject(
+        key=row.source_object_key, size_bytes=1_000_000, sha256="a" * 64
+    )
+    active = await job_repo.enqueue(
+        replay_id=row.id,
+        kind=ReplayJobKind.PROCESS,
+        available_at=NOW,
+    )
+    active.status = ReplayJobStatus.RETRY_SCHEDULED.value
+
+    with pytest.raises(ApiError) as raised:
+        await service.retry(row.id, token, now=NOW)
+
+    assert raised.value.status_code == 409
+    assert raised.value.code == "REPLAY_RETRY_NOT_ALLOWED"
+    assert job_repo.jobs == [active]
+    assert row.status == ReplayStatus.FAILED.value
 
 
 @pytest.mark.asyncio
@@ -840,6 +902,45 @@ async def test_list_artifacts_returns_public_access_objects() -> None:
     artifacts = await service.list_artifacts(row.id, token, now=NOW)
     assert len(artifacts) == 1
     assert artifacts[0].access.mode == "bearer"
+
+
+@pytest.mark.asyncio
+async def test_list_artifacts_hides_premature_frames_until_replay_is_ready() -> None:
+    """Frames can be persisted before the final READY transition.
+
+    The list route must not expose bearer or presigned URLs while a replay is
+    still extracting, otherwise users can access partial, non-canonical output.
+    """
+    storage = FakePresignedReplayStorage()
+    service, _, replay_repo, _, artifact_repo, _ = _service(
+        storage=storage, settings=_settings(replay_storage_backend="s3")
+    )
+    row, token = await _seed_replay(replay_repo, status=ReplayStatus.EXTRACTING)
+    artifact_repo.rows.append(
+        ReplayArtifactRow(
+            id=uuid4(),
+            replay_id=row.id,
+            kind=ReplayArtifactKind.ANCHOR_FRAME.value,
+            game_time_ms=0,
+            video_time_ms=48231,
+            object_key="frames/abc/anchor",
+            sha256="c" * 64,
+            media_type="image/jpeg",
+            size_bytes=100,
+            width=1280,
+            height=720,
+            duration_ms=None,
+            created_at=NOW,
+            delete_after=NOW + timedelta(days=7),
+        )
+    )
+
+    with pytest.raises(ApiError) as raised:
+        await service.list_artifacts(row.id, token, now=NOW)
+
+    assert raised.value.status_code == 404
+    assert raised.value.code == "REPLAY_NOT_FOUND"
+    assert storage.download_targets == []
 
 
 @pytest.mark.asyncio

@@ -190,12 +190,10 @@ class MetricsRegistry:
             lines.append(f"# HELP {histogram.name} {histogram.description}")
             lines.append(f"# TYPE {histogram.name} histogram")
             for labels, bucket_counts, total_sum, total_count in histogram.samples():
-                cumulative = 0
                 for bound, bucket_count in zip(histogram._buckets, bucket_counts, strict=True):
-                    cumulative += bucket_count
                     bucket_labels = {**labels, "le": _format_bound(bound)}
                     bucket_name = f"{histogram.name}_bucket{_format_labels(bucket_labels)}"
-                    lines.append(f"{bucket_name} {cumulative}")
+                    lines.append(f"{bucket_name} {bucket_count}")
                 inf_labels = {**labels, "le": "+Inf"}
                 lines.append(f"{histogram.name}_bucket{_format_labels(inf_labels)} {total_count}")
                 lines.append(f"{histogram.name}_sum{_format_labels(labels)} {total_sum}")
