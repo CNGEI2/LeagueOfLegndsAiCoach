@@ -75,12 +75,13 @@ def test_every_platform_has_typed_routes_and_display_names(platform_code: str) -
     sort_order, region_code, platform_host, name_zh, name_en = CATALOG[platform_code]
     routes = routes_for(platform)
 
-    assert platform_host == platform_host.lower()
-    assert platform_host.endswith(".api.riotgames.com")
+    assert routes.platform_host == routes.platform_host.lower()
+    assert routes.platform_host.endswith(".api.riotgames.com")
     assert routes.platform_host == platform_host
     assert routes.region == Region(region_code)
     assert routes.region.value in EXPECTED_REGIONS
     assert routes.regional_host == REGIONAL_HOSTS[region_code]
+    assert routes.regional_host == routes.regional_host.lower()
     assert routes.display_name_zh == name_zh
     assert routes.display_name_en == name_en
     assert routes.display_name_zh.strip()
