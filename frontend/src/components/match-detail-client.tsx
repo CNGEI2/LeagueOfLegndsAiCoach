@@ -9,6 +9,7 @@ import { MatchTeamTable } from "@/components/match-team-table";
 import { ReplaySection } from "@/components/replay-section";
 import type { Locale } from "@/i18n/locales";
 import { getMessages } from "@/i18n/messages";
+import { platformDisplayName } from "@/i18n/platform-names";
 
 type RequestState<T> =
   | { status: "loading" }
@@ -118,7 +119,7 @@ export function MatchDetailClient({
       <header className="match-detail-header">
         <div>
           <p className="eyebrow">
-            {data.platform} · {data.game_version}
+            {platformDisplayName(locale, data.platform)} · {data.game_version}
           </p>
           <h1>{messages.matchDetails}</h1>
           <p className="utility-data">

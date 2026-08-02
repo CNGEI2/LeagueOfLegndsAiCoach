@@ -86,7 +86,7 @@ export function PlayerPageClient({
 
   return (
     <main className="player-page">
-      <PlayerHeader player={state.response.player} messages={messages} />
+      <PlayerHeader player={state.response.player} messages={messages} locale={locale} />
       {state.response.matches.length === 0 ? (
         <DataState state="empty" messages={messages} />
       ) : (

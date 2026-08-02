@@ -2,7 +2,10 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { getRecentMatchesMock } = vi.hoisted(() => ({ getRecentMatchesMock: vi.fn() }));
+const { getRecentMatchesMock, notFoundMock } = vi.hoisted(() => ({
+  getRecentMatchesMock: vi.fn(),
+  notFoundMock: vi.fn(),
+}));
 
 vi.mock("@/api/client", () => ({
   getRecentMatches: getRecentMatchesMock,
@@ -18,8 +21,16 @@ vi.mock("@/api/client", () => ({
   },
 }));
 
+vi.mock("next/navigation", () => ({
+  notFound: () => {
+    notFoundMock();
+    throw new Error("NEXT_NOT_FOUND");
+  },
+}));
+
+import PlayerPage from "@/app/[locale]/players/[puuid]/page";
 import { ApiClientError, getRecentMatches } from "@/api/client";
-import type { RecentMatchesResponse } from "@/api/schemas";
+import type { Platform, RecentMatchesResponse } from "@/api/schemas";
 import { PlayerPageClient } from "@/components/player-page-client";
 
 const participant = {
@@ -213,9 +224,57 @@ describe("PlayerPageClient", () => {
     const cards = await screen.findAllByTestId("recent-match-card");
     expect(cards[0].querySelector("a")).toHaveAttribute(
       "href",
-      "/en-US/matches/NA1_3?platform=NA1&puuid=puuid-1",
+      `/en-US/matches/${encodeURIComponent("NA1_3")}?platform=${encodeURIComponent("NA1")}&puuid=${encodeURIComponent("puuid-1")}`,
     );
     expect(cards[1]).toHaveTextContent("Match details are not available for this queue.");
     expect(cards[1].querySelector("a")).toBeNull();
+  });
+});
+
+function fixtureFor(platform: Platform): RecentMatchesResponse {
+  return {
+    ...recentMatchesFixture,
+    player: { ...recentMatchesFixture.player, platform },
+    matches: recentMatchesFixture.matches.map((match, index) => ({
+      ...match,
+      match_id: `${platform}_${3 - index}`,
+      platform,
+    })),
+  };
+}
+
+describe("PlayerPageClient platform propagation", () => {
+  it.each(["EUW1", "KR"] as const)(
+    "preserves %s for recent-match requests, display, and match links",
+    async (platform) => {
+      const fixture = fixtureFor(platform);
+      vi.mocked(getRecentMatches).mockResolvedValue(fixture);
+      render(<PlayerPageClient locale="en-US" puuid="puuid-1" platform={platform} />);
+
+      expect(await screen.findByText(platform === "EUW1" ? "Europe West" : "Korea")).toBeVisible();
+      expect(getRecentMatches).toHaveBeenCalledWith(
+        expect.objectContaining({ platform, puuid: "puuid-1", locale: "en-US" }),
+        expect.any(AbortSignal),
+      );
+      const cards = screen.getAllByTestId("recent-match-card");
+      expect(cards[0].querySelector("a")).toHaveAttribute(
+        "href",
+        `/en-US/matches/${encodeURIComponent(`${platform}_3`)}?platform=${encodeURIComponent(platform)}&puuid=${encodeURIComponent("puuid-1")}`,
+      );
+      expect(screen.queryByText("NA1")).not.toBeInTheDocument();
+    },
+  );
+});
+
+describe("PlayerPage unknown platform rejection", () => {
+  it("rejects an unknown platform query without falling back to NA1", async () => {
+    await expect(
+      PlayerPage({
+        params: Promise.resolve({ locale: "en-US", puuid: "puuid-1" }),
+        searchParams: Promise.resolve({ platform: "XYZ1" }),
+      }),
+    ).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(notFoundMock).toHaveBeenCalled();
+    expect(getRecentMatches).not.toHaveBeenCalled();
   });
 });

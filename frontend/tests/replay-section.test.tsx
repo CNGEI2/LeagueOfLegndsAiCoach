@@ -151,13 +151,16 @@ function artifactsResponse(
   };
 }
 
-function renderSection(locale: "en-US" | "zh-CN" = "en-US") {
+function renderSection(
+  locale: "en-US" | "zh-CN" = "en-US",
+  platform: "NA1" | "EUW1" | "KR" = "NA1",
+) {
   return render(
     <ReplaySection
       locale={locale}
       matchId={MATCH_ID}
       puuid="selected-puuid"
-      platform="NA1"
+      platform={platform}
       matchDurationSeconds={1800}
     />,
   );
@@ -260,6 +263,48 @@ describe("ReplaySection upload gating and anchor", () => {
       );
     });
   });
+
+  it.each(["EUW1", "KR"] as const)(
+    "preserves %s when creating a replay without falling back to NA1",
+    async (platform) => {
+      const user = userEvent.setup();
+      const messages = getMessages("en-US");
+      renderSection("en-US", platform);
+
+      await selectValidFile(user);
+      await user.click(screen.getByRole("checkbox", { name: messages.replayRightsLabel }));
+      const video = screen.getByTestId("replay-video-preview") as HTMLVideoElement;
+      video.currentTime = 12;
+      await user.click(screen.getByRole("button", { name: messages.replaySetGameZero }));
+
+      createReplayMock.mockResolvedValue({
+        replay_id: REPLAY_ID,
+        access_token: TOKEN,
+        status: "created",
+        upload: {
+          method: "PUT",
+          url: `/api/v1/replays/${REPLAY_ID}/content`,
+          headers: {},
+          expires_at: "2026-08-01T15:30:00+00:00",
+        },
+        retention: { source_hours_after_processing: 24, derived_days_after_ready: 7 },
+        request_id: SAFE_REQUEST_ID,
+      });
+      uploadReplayContentMock.mockResolvedValue(undefined);
+      completeReplayMock.mockResolvedValue(statusResponse({ status: "queued" }));
+      getReplayStatusMock.mockResolvedValue(statusResponse({ status: "queued" }));
+
+      await user.click(screen.getByRole("button", { name: messages.replayUpload }));
+
+      await waitFor(() => {
+        expect(createReplayMock).toHaveBeenCalledWith(
+          expect.objectContaining({ platform, matchId: MATCH_ID, puuid: "selected-puuid" }),
+          expect.any(AbortSignal),
+        );
+      });
+      expect(createReplayMock.mock.calls[0]?.[0]?.platform).not.toBe("NA1");
+    },
+  );
 });
 
 describe("ReplaySection upload expiry handling", () => {

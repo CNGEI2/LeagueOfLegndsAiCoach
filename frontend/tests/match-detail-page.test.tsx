@@ -2,7 +2,10 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { getMatchDetailMock } = vi.hoisted(() => ({ getMatchDetailMock: vi.fn() }));
+const { getMatchDetailMock, notFoundMock } = vi.hoisted(() => ({
+  getMatchDetailMock: vi.fn(),
+  notFoundMock: vi.fn(),
+}));
 
 vi.mock("@/api/client", () => ({
   getMatchDetail: getMatchDetailMock,
@@ -15,6 +18,13 @@ vi.mock("@/api/client", () => ({
     ) {
       super(code);
     }
+  },
+}));
+
+vi.mock("next/navigation", () => ({
+  notFound: () => {
+    notFoundMock();
+    throw new Error("NEXT_NOT_FOUND");
   },
 }));
 
@@ -43,8 +53,9 @@ vi.mock("@/components/replay-section", () => ({
   ),
 }));
 
+import MatchDetailPage from "@/app/[locale]/matches/[matchId]/page";
 import { ApiClientError, getMatchDetail } from "@/api/client";
-import type { MatchDetailResponse } from "@/api/schemas";
+import type { MatchDetailResponse, Platform } from "@/api/schemas";
 import { MatchDetailClient } from "@/components/match-detail-client";
 
 function participant(puuid: string, teamId: number, championId: number) {
@@ -238,5 +249,58 @@ describe("MatchDetailClient", () => {
 
     await waitFor(() => expect(firstSignal?.aborted).toBe(true));
     expect(await screen.findByText(/NA1_new/)).toBeVisible();
+  });
+});
+
+function detailFixtureFor(platform: Platform): MatchDetailResponse {
+  return {
+    ...matchDetailFixture,
+    match_id: `${platform}_123456789`,
+    platform,
+  };
+}
+
+describe("MatchDetailClient platform propagation", () => {
+  it.each(["EUW1", "KR"] as const)(
+    "preserves %s for match-detail requests, display, and replay props",
+    async (platform) => {
+      const fixture = detailFixtureFor(platform);
+      vi.mocked(getMatchDetail).mockResolvedValue(fixture);
+      render(
+        <MatchDetailClient
+          locale="en-US"
+          matchId={`${platform}_123456789`}
+          puuid="selected-puuid"
+          platform={platform}
+        />,
+      );
+
+      expect(
+        await screen.findByText(platform === "EUW1" ? /Europe West/ : /^Korea/),
+      ).toBeVisible();
+      expect(getMatchDetail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          matchId: `${platform}_123456789`,
+          platform,
+          puuid: "selected-puuid",
+        }),
+        expect.any(AbortSignal),
+      );
+      expect(screen.getByTestId("replay-section")).toHaveAttribute("data-platform", platform);
+      expect(screen.queryByText("NA1")).not.toBeInTheDocument();
+    },
+  );
+});
+
+describe("MatchDetailPage unknown platform rejection", () => {
+  it("rejects an unknown platform query without falling back to NA1", async () => {
+    await expect(
+      MatchDetailPage({
+        params: Promise.resolve({ locale: "en-US", matchId: "EUW1_1" }),
+        searchParams: Promise.resolve({ platform: "XYZ1", puuid: "selected-puuid" }),
+      }),
+    ).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(notFoundMock).toHaveBeenCalled();
+    expect(getMatchDetail).not.toHaveBeenCalled();
   });
 });

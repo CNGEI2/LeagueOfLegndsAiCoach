@@ -81,7 +81,7 @@ afterAll(() => styleElement.remove());
 
 describe("player evidence presentation", () => {
   it("constrains the profile image inside a restrained player header", () => {
-    render(<PlayerHeader player={player} messages={getMessages("en-US")} />);
+    render(<PlayerHeader player={player} messages={getMessages("en-US")} locale="en-US" />);
 
     const imageStyle = getComputedStyle(screen.getByAltText("Profile icon for PlayerName"));
     expect(imageStyle.width).toBe("88px");

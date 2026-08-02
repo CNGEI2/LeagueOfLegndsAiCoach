@@ -38,7 +38,7 @@ export function RecentMatchCard({
 }) {
   const matchDate = new Date(match.started_at);
   const outcome = match.participant.won ? messages.win : messages.loss;
-  const link = `/${locale}/matches/${encodeURIComponent(match.match_id)}?platform=${match.platform}&puuid=${encodeURIComponent(puuid)}`;
+  const link = `/${locale}/matches/${encodeURIComponent(match.match_id)}?platform=${encodeURIComponent(match.platform)}&puuid=${encodeURIComponent(puuid)}`;
 
   return (
     <article className="match-slip" data-testid="recent-match-card">

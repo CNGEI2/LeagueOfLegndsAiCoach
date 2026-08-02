@@ -55,7 +55,9 @@ function navigateToPlayer(
   puuid: string,
   platform: Platform,
 ) {
-  router.push(`/${locale}/players/${encodeURIComponent(puuid)}?platform=${platform}`);
+  router.push(
+    `/${locale}/players/${encodeURIComponent(puuid)}?platform=${encodeURIComponent(platform)}`,
+  );
 }
 
 export function RiotSearchForm({
