@@ -340,6 +340,15 @@ class FakeReplayStorage:
             self.objects.pop(part_key)
             self.events.append(f"delete:{part_key}")
 
+    async def promote(self, temp_key: str, final_key: str) -> StoredObject:
+        raise AssertionError("promote unexpected")
+
+    async def delete_prefix(self, prefix: str) -> None:
+        self.events.append(f"delete_prefix:{prefix}")
+        removed = [key for key in self.objects if key == prefix or key.startswith(f"{prefix}/")]
+        for key in removed:
+            self.objects.pop(key, None)
+
 
 @dataclass
 class FakeMediaRunner:
@@ -775,6 +784,22 @@ async def test_user_delete_mid_process_cancels_at_stage_boundary() -> None:
     assert not any(key.startswith("normalized/") for key in store.objects)
     assert artifact_repo.rows == []
 
+    # A subsequent delete_all job must sweep every replay-scoped prefix via
+    # delete_prefix so any orphaned temp/partial objects are also removed,
+    # not just the keys the processor happens to know about.
+    delete_job = _job(replay.id, kind=ReplayJobKind.DELETE_ALL)
+    job_repo.jobs[delete_job.id] = delete_job
+
+    await processor.delete_all(delete_job)
+
+    prefix_calls = [item for item in events if item.startswith("delete_prefix:")]
+    assert f"delete_prefix:source/{replay.id}" in prefix_calls
+    assert f"delete_prefix:normalized/{replay.id}" in prefix_calls
+    assert f"delete_prefix:frames/{replay.id}" in prefix_calls
+    assert any(call.startswith(f"delete_prefix:tmp/source/{replay.id}") for call in prefix_calls)
+    assert delete_job.status == ReplayJobStatus.SUCCEEDED.value
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+
 
 @pytest.mark.asyncio
 async def test_delete_source_keeps_normalized_and_frames() -> None:
@@ -847,6 +872,51 @@ async def test_delete_all_scrubs_even_when_objects_missing() -> None:
 
     await processor.delete_all(job)
 
+    assert artifact_repo.rows == []
+    assert "scrub_deleted" in shared
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert job.status == ReplayJobStatus.SUCCEEDED.value
+
+
+@pytest.mark.asyncio
+async def test_delete_all_sweeps_orphaned_objects_via_prefix() -> None:
+    """Objects that were never recorded on the replay row or artifact table
+    (e.g. an abandoned temp upload, or a frame left behind by a crashed run)
+    must still be removed because delete_all sweeps by prefix rather than
+    only deleting the specific keys it happens to know about."""
+    replay = _replay(status=ReplayStatus.DELETING)
+    normalized_key = f"normalized/{replay.id}/video"
+    replay.normalized_object_key = normalized_key
+    orphan_frame_key = f"frames/{replay.id}/orphan-not-in-db"
+    orphan_temp_key = f"tmp/source/{replay.id}/input"
+    other_replay_key = f"source/{uuid4()}/input"
+    events: list[str] = []
+    store = FakeReplayStorage(
+        objects={
+            replay.source_object_key or "": SOURCE_BYTES,
+            normalized_key: NORMALIZED_BYTES,
+            orphan_frame_key: FRAME_BYTES,
+            orphan_temp_key: b"abandoned-temp-upload",
+            other_replay_key: b"unrelated-replay-bytes",
+        },
+        events=events,
+    )
+    processor, replay_repo, job_repo, artifact_repo, _, _, shared = _processor(
+        replay=replay,
+        events=events,
+        storage=store,
+    )
+    job = _job(replay.id, kind=ReplayJobKind.DELETE_ALL)
+    job_repo.jobs[job.id] = job
+
+    await processor.delete_all(job)
+
+    assert replay.source_object_key not in store.objects
+    assert normalized_key not in store.objects
+    assert orphan_frame_key not in store.objects
+    assert orphan_temp_key not in store.objects
+    # Objects belonging to a different replay must be left untouched.
+    assert other_replay_key in store.objects
     assert artifact_repo.rows == []
     assert "scrub_deleted" in shared
     assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value

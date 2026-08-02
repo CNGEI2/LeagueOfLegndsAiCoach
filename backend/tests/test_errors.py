@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
-from app.core.errors import api_error_handler
+from app.core.errors import api_error_handler, replay_rate_limited
 from app.main import create_app
 
 
@@ -80,6 +80,23 @@ def test_unhandled_exceptions_keep_request_id_and_cors_headers(
     }
     assert "X-Request-ID" in exposed
     assert "secret" not in response.text
+
+
+def test_replay_rate_limited_sets_retry_after_header_and_params() -> None:
+    error = replay_rate_limited(12.4)
+
+    assert error.status_code == 429
+    assert error.code == "REPLAY_RATE_LIMITED"
+    assert error.retryable is True
+    assert error.params["retry_after_seconds"] == 12.4
+    assert error.headers["Retry-After"] == "12"
+
+
+def test_replay_rate_limited_without_retry_after_omits_header() -> None:
+    error = replay_rate_limited()
+
+    assert error.params == {}
+    assert error.headers == {}
 
 
 @pytest.mark.asyncio

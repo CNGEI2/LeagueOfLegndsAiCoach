@@ -1,4 +1,4 @@
-.PHONY: install dev-backend dev-frontend dev-replay-worker test lint typecheck verify verify-postgres verify-replay verify-replay-ffmpeg verify-replay-postgres smoke-riot smoke-replay docker-up docker-down
+.PHONY: install dev-backend dev-frontend dev-replay-worker test lint typecheck verify verify-postgres verify-replay verify-replay-ffmpeg verify-replay-postgres smoke-riot smoke-replay docker-up docker-down e2e-replay-compose
 
 install:
 	python3 -m venv backend/.venv
@@ -60,3 +60,6 @@ docker-up:
 
 docker-down:
 	docker compose down
+
+e2e-replay-compose:
+	./scripts/e2e_replay_compose.sh

@@ -237,9 +237,18 @@ function abortError(): DOMException {
   return new DOMException("The operation was aborted.", "AbortError");
 }
 
+const UPLOAD_EXPIRY_SKEW_MS = 5000;
+
 export async function uploadReplayContent(input: UploadReplayContentInput): Promise<void> {
   const url = new URL(input.upload.url, apiBaseUrl).toString();
   const relative = input.upload.url.startsWith("/");
+
+  if (relative) {
+    const expiresAtMs = Date.parse(input.upload.expires_at);
+    if (Number.isFinite(expiresAtMs) && expiresAtMs - Date.now() <= UPLOAD_EXPIRY_SKEW_MS) {
+      throw new ApiClientError("REPLAY_UPLOAD_EXPIRED", {}, false, null);
+    }
+  }
 
   await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();

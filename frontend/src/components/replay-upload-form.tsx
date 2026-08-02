@@ -5,8 +5,16 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { Messages } from "@/i18n/messages";
 
 const MAX_BYTES = 4 * 1024 * 1024 * 1024;
-const ALLOWED_EXTENSIONS = new Set(["mp4", "webm", "mov"]);
-const ALLOWED_MIME_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
+const ALLOWED_EXTENSIONS = new Set(["mp4", "webm", "mov", "mkv"]);
+const ALLOWED_MIME_TYPES = new Set([
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-matroska",
+  "application/octet-stream",
+]);
+const ACCEPT_ATTRIBUTE =
+  "video/mp4,video/webm,video/quicktime,video/x-matroska,application/octet-stream,.mp4,.webm,.mov,.mkv";
 
 function fill(template: string, values: Record<string, string>) {
   return template.replace(/\{(\w+)\}/g, (_, key: string) => values[key] ?? "");
@@ -131,7 +139,7 @@ export function ReplayUploadForm({
         <input
           id={fileInputId}
           type="file"
-          accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov"
+          accept={ACCEPT_ATTRIBUTE}
           disabled={disabled}
           onChange={(event) => {
             handleFileChange(event.target.files?.[0] ?? null);

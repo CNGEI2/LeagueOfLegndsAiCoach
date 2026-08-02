@@ -10,6 +10,8 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from app.core.config import Settings
+from app.core.metrics import MetricsRegistry
+from app.core.metrics import metrics as default_metrics
 from app.models.replay import ReplayArtifactRow, ReplayJobRow, ReplayUploadRow
 from app.repositories.replays import (
     ReplayArtifactRepository,
@@ -30,7 +32,11 @@ from app.services.replays.media import (
     ReplayMediaRunner,
     validate_probe,
 )
-from app.services.replays.storage.base import ReplayObjectNotFound, ReplayStorage
+from app.services.replays.storage.base import (
+    ReplayObjectNotFound,
+    ReplayStorage,
+    temp_upload_key,
+)
 
 _FRAME_INTERVAL_MS = 30_000
 _MAX_FRAMES = 181
@@ -59,6 +65,7 @@ class ReplayProcessor:
         storage: ReplayStorage,
         media: ReplayMediaRunner,
         clock: Callable[[], datetime] | None = None,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         self._settings = settings
         self._replays = replay_repository
@@ -67,6 +74,7 @@ class ReplayProcessor:
         self._storage = storage
         self._media = media
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._metrics = metrics or default_metrics
 
     async def process(self, job: ReplayJobRow) -> None:
         now = self._clock()
@@ -78,12 +86,18 @@ class ReplayProcessor:
             job.status = ReplayJobStatus.CANCELLED.value
         except Exception as error:
             await self._handle_process_failure(job, error)
+        else:
+            duration = (self._clock() - now).total_seconds()
+            self._metrics.replay_processing_duration_seconds.observe(
+                max(0.0, duration), stage="total"
+            )
 
     async def delete_source(self, job: ReplayJobRow) -> None:
         now = self._clock()
         try:
             row = await self._require_replay(job.replay_id)
             source_key = row.source_object_key
+            source_delete_after = row.source_delete_after
             if source_key:
                 await self._delete_missing_ok(source_key)
             updated = await self._replays.transition(
@@ -102,6 +116,7 @@ class ReplayProcessor:
             del updated
             await self._jobs.succeed(job.id, now=now)
             job.status = ReplayJobStatus.SUCCEEDED.value
+            self._observe_cleanup_lag(source_delete_after, now=now, kind="source")
         except Exception as error:
             await self._fail_job(job, error=error, retryable=True, now=now)
 
@@ -109,6 +124,7 @@ class ReplayProcessor:
         now = self._clock()
         try:
             row = await self._require_replay(job.replay_id)
+            cleanup_deadline = row.derived_delete_after or row.source_delete_after
             # Confirm content is inaccessible to clients by requiring deleting/deleted.
             if ReplayStatus(row.status) not in {
                 ReplayStatus.DELETING,
@@ -122,15 +138,37 @@ class ReplayProcessor:
                     values={"updated_at": now},
                 )
 
+            first_storage_error: Exception | None = None
+
+            # Sweep by prefix so any orphaned object under this replay's
+            # namespace is removed, even one the row/artifact rows never
+            # recorded (e.g. an abandoned temp upload or a frame left behind
+            # by a crashed run). This is the primary cleanup mechanism.
+            for prefix in (
+                f"source/{row.id}",
+                f"normalized/{row.id}",
+                f"frames/{row.id}",
+                temp_upload_key(f"source/{row.id}"),
+            ):
+                try:
+                    await self._storage.delete_prefix(prefix)
+                except Exception as error:
+                    if first_storage_error is None:
+                        first_storage_error = error
+
+            # Best-effort fallback: also delete the specific keys we know
+            # about directly, in case a backend's delete_prefix doesn't cover
+            # every stored representation of a key (e.g. legacy layouts).
             keys: list[str] = []
             if row.source_object_key:
                 keys.append(row.source_object_key)
+                if self._settings.replay_storage_backend == "s3":
+                    keys.append(temp_upload_key(row.source_object_key))
             if row.normalized_object_key:
                 keys.append(row.normalized_object_key)
             for artifact in await self._artifacts.list_for_replay(row.id):
                 keys.append(artifact.object_key)
 
-            first_storage_error: Exception | None = None
             for key in keys:
                 try:
                     await self._delete_missing_ok(key)
@@ -144,6 +182,7 @@ class ReplayProcessor:
             await self._replays.scrub_deleted(row.id, now=now)
             await self._jobs.succeed(job.id, now=now)
             job.status = ReplayJobStatus.SUCCEEDED.value
+            self._observe_cleanup_lag(cleanup_deadline, now=now, kind="all")
         except Exception as error:
             await self._fail_job(job, error=error, retryable=True, now=now)
 
@@ -471,6 +510,7 @@ class ReplayProcessor:
                 job.status = ReplayJobStatus.CANCELLED.value
                 return
 
+        self._metrics.replay_processing_failures_total.inc(error_code=code)
         await self._fail_job(job, error=error, retryable=retryable, now=now, code=code)
 
     async def _fail_job(
@@ -493,6 +533,8 @@ class ReplayProcessor:
             available_at=available_at,
         )
         job.status = updated.status
+        if available_at is not None:
+            self._metrics.replay_job_retries_total.inc(kind=job.kind)
 
     async def _transition(
         self,
@@ -532,6 +574,12 @@ class ReplayProcessor:
             await self._storage.delete(key)
         except ReplayObjectNotFound:
             return
+
+    def _observe_cleanup_lag(self, deadline: datetime | None, *, now: datetime, kind: str) -> None:
+        if deadline is None:
+            return
+        lag_seconds = max(0.0, (now - deadline).total_seconds())
+        self._metrics.replay_cleanup_lag_seconds.observe(lag_seconds, kind=kind)
 
 
 def plan_frame_game_times(coverage_end_ms: int, *, max_frames: int = _MAX_FRAMES) -> list[int]:

@@ -1,9 +1,12 @@
+import ipaddress
 from functools import cached_property
 from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+IpNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
@@ -46,12 +49,26 @@ class Settings(BaseSettings):
     replay_s3_secret_access_key: SecretStr = SecretStr("")
     replay_s3_prefix: str = "replays"
     replay_gateway_rate_limits_enforced: bool = False
+    replay_gateway_create_limit_per_hour: int = 5
+    replay_gateway_upload_concurrency_limit: int = 2
+    replay_gateway_request_limit_per_minute: int = 60
+    replay_trusted_proxy_cidrs: str = ""
 
     model_config = SettingsConfigDict(env_file=ROOT_ENV_FILE, extra="ignore")
 
     @cached_property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.backend_cors_origins.split(",") if origin.strip()]
+
+    @cached_property
+    def replay_trusted_proxy_networks(self) -> tuple[IpNetwork, ...]:
+        networks: list[IpNetwork] = []
+        for entry in self.replay_trusted_proxy_cidrs.split(","):
+            candidate = entry.strip()
+            if not candidate:
+                continue
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        return tuple(networks)
 
     @property
     def riot_configured(self) -> bool:

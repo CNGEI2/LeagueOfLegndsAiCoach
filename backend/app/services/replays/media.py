@@ -5,6 +5,7 @@ import contextlib
 import json
 import math
 import re
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,9 @@ ProgressCallback = Callable[[int], Coroutine[Any, Any, None]]
 
 _MAX_DIAGNOSTIC_BYTES = 2048
 _PATH_RE = re.compile(r"(?:/Users|/home|/var|/tmp|/private|/opt|/[A-Za-z])[^\s\"']+")
+_STDERR_TAIL_BYTES = 64 * 1024
+_PROGRESS_MIN_INTERVAL_SECONDS = 1.0
+_OUT_TIME_RE = re.compile(r"^(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$")
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,72 @@ class ProcessRunner(Protocol):
         timeout_seconds: float,
         on_stdout_line: Callable[[str], None] | None = None,
     ) -> ProcessResult: ...
+
+
+class _TailBuffer:
+    """Bounded byte buffer retaining only the most recent `max_bytes`.
+
+    Used for stderr retention so a long-running ffmpeg process cannot grow
+    memory unboundedly; only the tail is needed for diagnostics.
+    """
+
+    __slots__ = ("_max_bytes", "_data")
+
+    def __init__(self, max_bytes: int) -> None:
+        self._max_bytes = max_bytes
+        self._data = bytearray()
+
+    def append(self, chunk: bytes) -> None:
+        self._data.extend(chunk)
+        overflow = len(self._data) - self._max_bytes
+        if overflow > 0:
+            del self._data[:overflow]
+
+    def getvalue(self) -> bytes:
+        return bytes(self._data)
+
+
+class _RateLimitedProgress:
+    """Serializes progress callbacks and rate-limits them to at most one per
+    `min_interval_seconds`, while always allowing a final, non-rate-limited
+    emission via `submit_final`.
+    """
+
+    def __init__(
+        self,
+        callback: ProgressCallback,
+        *,
+        min_interval_seconds: float = _PROGRESS_MIN_INTERVAL_SECONDS,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self._callback = callback
+        self._min_interval_seconds = min_interval_seconds
+        self._clock = clock or time.monotonic
+        self._lock = asyncio.Lock()
+        self._last_emitted_value: int | None = None
+        self._last_emitted_at: float | None = None
+
+    async def submit(self, value: int) -> None:
+        async with self._lock:
+            if value == self._last_emitted_value:
+                return
+            now = self._clock()
+            if (
+                self._last_emitted_at is not None
+                and (now - self._last_emitted_at) < self._min_interval_seconds
+            ):
+                return
+            await self._callback(value)
+            self._last_emitted_value = value
+            self._last_emitted_at = now
+
+    async def submit_final(self, value: int) -> None:
+        async with self._lock:
+            if value == self._last_emitted_value:
+                return
+            await self._callback(value)
+            self._last_emitted_value = value
+            self._last_emitted_at = self._clock()
 
 
 def _truncate_diagnostics(raw: bytes | str) -> str:
@@ -213,13 +283,42 @@ def parse_frame_rate(value: str | float | int | None) -> float:
 
 
 def parse_progress_out_time_ms(line: str) -> int | None:
-    if not line.startswith("out_time_ms="):
+    """Parse an ffmpeg `-progress` output line into elapsed milliseconds.
+
+    ffmpeg's `-progress` stream emits several time-carrying keys; supporting
+    all of them makes parsing robust across ffmpeg versions/builds:
+      - `out_time_ms=<milliseconds>`
+      - `out_time_us=<microseconds>` (converted to milliseconds)
+      - `out_time=HH:MM:SS.micro` (converted to milliseconds)
+    """
+    if line.startswith("out_time_ms="):
+        raw = line.split("=", 1)[1].strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    if line.startswith("out_time_us="):
+        raw = line.split("=", 1)[1].strip()
+        try:
+            return int(raw) // 1000
+        except ValueError:
+            return None
+    if line.startswith("out_time="):
+        raw = line.split("=", 1)[1].strip()
+        return _parse_out_time_timestamp(raw)
+    return None
+
+
+def _parse_out_time_timestamp(raw: str) -> int | None:
+    match = _OUT_TIME_RE.match(raw)
+    if not match:
         return None
-    raw = line.split("=", 1)[1].strip()
-    try:
-        return int(raw)
-    except ValueError:
-        return None
+    hours, minutes, seconds, fraction = match.groups()
+    total_ms = (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000
+    if fraction:
+        micros = int((fraction + "000000")[:6])
+        total_ms += micros // 1000
+    return total_ms
 
 
 def progress_percent_from_out_time(out_time_ms: int, duration_ms: int) -> int:
@@ -396,8 +495,11 @@ class AsyncSubprocessRunner:
         timeout_seconds: float,
         on_stdout_line: Callable[[str], None],
     ) -> ProcessResult:
-        stdout_chunks: list[bytes] = []
-        stderr_chunks: list[bytes] = []
+        # Only the trailing, not-yet-newline-terminated fragment is kept for
+        # parsing; completed lines are discarded once parsed and the full
+        # stdout stream is never retained, since callers stream progress
+        # lines rather than needing the accumulated output.
+        stderr_tail = _TailBuffer(_STDERR_TAIL_BYTES)
 
         async def _read_stdout() -> None:
             assert process.stdout is not None
@@ -406,7 +508,6 @@ class AsyncSubprocessRunner:
                 chunk = await process.stdout.read(4096)
                 if not chunk:
                     break
-                stdout_chunks.append(chunk)
                 buffer += chunk
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
@@ -420,7 +521,7 @@ class AsyncSubprocessRunner:
                 chunk = await process.stderr.read(4096)
                 if not chunk:
                     break
-                stderr_chunks.append(chunk)
+                stderr_tail.append(chunk)
 
         async def _gather() -> None:
             await asyncio.gather(_read_stdout(), _read_stderr(), process.wait())
@@ -428,8 +529,8 @@ class AsyncSubprocessRunner:
         await asyncio.wait_for(_gather(), timeout=timeout_seconds)
         return ProcessResult(
             returncode=process.returncode or 0,
-            stdout=b"".join(stdout_chunks),
-            stderr=b"".join(stderr_chunks),
+            stdout=b"",
+            stderr=stderr_tail.getvalue(),
         )
 
     async def _terminate_then_kill(self, process: asyncio.subprocess.Process) -> None:
@@ -452,11 +553,13 @@ class ReplayMediaRunner:
         ffprobe_path: str = "ffprobe",
         process_runner: ProcessRunner | None = None,
         timeout_seconds: float = 7200,
+        progress_clock: Callable[[], float] | None = None,
     ) -> None:
         self._ffmpeg_path = ffmpeg_path
         self._ffprobe_path = ffprobe_path
         self._runner: ProcessRunner = process_runner or AsyncSubprocessRunner()
         self._timeout_seconds = timeout_seconds
+        self._progress_clock = progress_clock
 
     async def probe(self, input_path: Path) -> MediaProbe:
         command = build_ffprobe_command(self._ffprobe_path, input_path)
@@ -501,6 +604,11 @@ class ReplayMediaRunner:
         duration_ms = max(1, int(probe.duration_seconds * 1000))
         last_progress = -1
         progress_tasks: list[asyncio.Task[None]] = []
+        gate = (
+            _RateLimitedProgress(progress, clock=self._progress_clock)
+            if progress is not None
+            else None
+        )
 
         def _on_line(line: str) -> None:
             nonlocal last_progress
@@ -511,8 +619,8 @@ class ReplayMediaRunner:
             if value == last_progress:
                 return
             last_progress = value
-            if progress is not None:
-                progress_tasks.append(asyncio.create_task(progress(value)))
+            if gate is not None:
+                progress_tasks.append(asyncio.create_task(gate.submit(value)))
 
         command = build_normalize_command(self._ffmpeg_path, input_path, temp_path)
         result = await self._runner.run(
@@ -533,8 +641,8 @@ class ReplayMediaRunner:
                 ),
             )
 
-        if progress is not None and last_progress < 80:
-            await progress(80)
+        if gate is not None:
+            await gate.submit_final(80)
 
         normalized = await self.probe(temp_path)
         self._assert_normalized_output(normalized, source=probe)

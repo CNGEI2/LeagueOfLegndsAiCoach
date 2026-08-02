@@ -107,7 +107,9 @@ Observed acceptance on this workstation: automated unit/type/build checks and th
 | `REPLAY_STORAGE_BACKEND` | `local` (default) or `s3`. |
 | `REPLAY_LOCAL_ROOT` | Private local storage root. Defaults to `<repo>/var/replays`. Compose uses `/var/lib/lol-ai-coach/replays`. |
 | `REPLAY_S3_*` | S3-compatible endpoint/region/bucket/credentials/prefix. Never expose to the frontend. |
-| `REPLAY_GATEWAY_RATE_LIMITS_ENFORCED` | Production gate. Must be `true` when `APP_ENV=production` and replay is enabled. Documents intended limits: 5 create/hour/IP, 2 local uploads/IP, 60 API requests/minute/IP. |
+| `REPLAY_GATEWAY_RATE_LIMITS_ENFORCED` | Production gate. Must be `true` when `APP_ENV=production` and replay is enabled. When `true`, the API enforces (per client IP, in-memory): 5 creates/hour, 2 concurrent local uploads, 60 ordinary requests/minute. Rejections return `429 REPLAY_RATE_LIMITED` with a `Retry-After` header. |
+| `REPLAY_GATEWAY_CREATE_LIMIT_PER_HOUR` / `REPLAY_GATEWAY_UPLOAD_CONCURRENCY_LIMIT` / `REPLAY_GATEWAY_REQUEST_LIMIT_PER_MINUTE` | Override the default gateway rate limits above. |
+| `REPLAY_TRUSTED_PROXY_CIDRS` | Comma-separated CIDRs. `X-Forwarded-For` is only trusted for rate-limit client-IP resolution when the direct peer is inside one of these networks; otherwise the direct socket IP is used. Empty (default) means never trust `X-Forwarded-For`. Raw client IPs are never logged, only a truncated SHA-256 reference. |
 | `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID` | Ignored local smoke binding identity; leave empty in `.env.example`. |
 
 ### API
@@ -139,6 +141,12 @@ Seven Replay APIs:
 - `DELETE /api/v1/replays/{replay_id}`
 
 Artifact bytes are served at `GET /api/v1/replays/{replay_id}/artifacts/{artifact_id}/content` with the possession token (or via short-lived presigned URLs in S3 mode).
+
+Gateway rate limits (`REPLAY_GATEWAY_RATE_LIMITS_ENFORCED`) are enforced in-process per client IP and return `429 REPLAY_RATE_LIMITED`; see the Configuration table. Raw client IPs are never logged.
+
+Production hardening: the backend/worker container runs as a non-root user; the `replay-worker` Compose service runs with a read-only root filesystem, `tmpfs` scratch space at `/tmp` and `/var/tmp`, and a `stop_grace_period` so an in-flight job can finish draining after `SIGTERM` before being force-killed. Processing duration, failures (by error code), job retries, and cleanup lag are recorded in an in-memory metrics registry exposed as Prometheus text at `GET /internal/metrics` (an internal-only endpoint, not for public/browser use; worker-recorded metrics are process-local, so this endpoint reflects the API process's own view unless worker and API share a process).
+
+Run `make e2e-replay-compose` (or `./scripts/e2e_replay_compose.sh`) to exercise the full Docker Compose flow (locale routes, upload/complete/refresh/frames/delete, and object cleanup) end to end; it requires Docker and a configured `REPLAY_SMOKE_MATCH_ID`/`REPLAY_SMOKE_PUUID` and prints a clear `SKIPPED` notice instead of failing when either is unavailable.
 
 ### Riot disclaimer
 
@@ -249,7 +257,9 @@ CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。
 | `REPLAY_STORAGE_BACKEND` | `local`（默认）或 `s3`。 |
 | `REPLAY_LOCAL_ROOT` | 私有本地存储根目录；默认 `<repo>/var/replays`。Compose 使用 `/var/lib/lol-ai-coach/replays`。 |
 | `REPLAY_S3_*` | S3 兼容 endpoint/region/bucket/凭证/前缀；绝不能暴露给前端。 |
-| `REPLAY_GATEWAY_RATE_LIMITS_ENFORCED` | 生产上线门。`APP_ENV=production` 且启用回放时必须为 `true`。文档约定限制：每 IP 每小时 5 次 create、每 IP 2 次本地上传、每 IP 每分钟 60 次 API 请求。 |
+| `REPLAY_GATEWAY_RATE_LIMITS_ENFORCED` | 生产上线门。`APP_ENV=production` 且启用回放时必须为 `true`。为 `true` 时后端按客户端 IP 在进程内强制执行：每小时 5 次 create、2 个并发本地上传、每分钟 60 次普通请求；超限返回 `429 REPLAY_RATE_LIMITED` 并带 `Retry-After`。 |
+| `REPLAY_GATEWAY_CREATE_LIMIT_PER_HOUR` / `REPLAY_GATEWAY_UPLOAD_CONCURRENCY_LIMIT` / `REPLAY_GATEWAY_REQUEST_LIMIT_PER_MINUTE` | 覆盖上述默认网关限流值。 |
+| `REPLAY_TRUSTED_PROXY_CIDRS` | 逗号分隔的 CIDR 列表。仅当直连 socket 位于配置网段内时才信任 `X-Forwarded-For` 做限流用客户端 IP 解析；默认留空，即从不信任该请求头。原始客户端 IP 从不写入日志，仅记录截断后的 SHA-256 引用。 |
 | `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID` | 被忽略的本地冒烟绑定身份；`.env.example` 必须留空。 |
 
 ### API
@@ -281,6 +291,12 @@ S3 bucket CORS（`REPLAY_STORAGE_BACKEND=s3` 时）：允许前端源站对预�
 - `DELETE /api/v1/replays/{replay_id}`
 
 产物字节通过带 possession token 的 `GET /api/v1/replays/{replay_id}/artifacts/{artifact_id}/content` 提供（S3 模式也可使用短时预签名 URL）。
+
+网关限流（`REPLAY_GATEWAY_RATE_LIMITS_ENFORCED`）按客户端 IP 在进程内强制执行，超限返回 `429 REPLAY_RATE_LIMITED`；详见配置表。原始客户端 IP 从不写入日志。
+
+生产加固：后端/worker 容器以非 root 用户运行；`replay-worker` Compose 服务使用只读根文件系统，通过 `/tmp`、`/var/tmp` 的 `tmpfs` 提供可写临时空间，并设置 `stop_grace_period`，使正在处理中的任务在收到 `SIGTERM` 后仍有时间跑完再被强制终止。处理耗时、按错误码统计的失败数、任务重试次数与清理延迟都记录在内存指标注册表中，以 Prometheus 文本格式通过 `GET /internal/metrics` 暴露（仅限内部使用，不面向浏览器/公网；worker 记录的指标是进程本地的，除非 worker 与 API 共用进程，否则该端点只反映 API 进程自身的视角）。
+
+运行 `make e2e-replay-compose`（或 `./scripts/e2e_replay_compose.sh`）可端到端跑通完整 Docker Compose 流程（本地化路由、上传/完成/刷新/取帧/删除，以及对象清理）；需要 Docker 以及配置好的 `REPLAY_SMOKE_MATCH_ID`/`REPLAY_SMOKE_PUUID`，若二者不可用会打印明确的 `SKIPPED` 提示而不是失败。
 
 ### Riot 声明
 

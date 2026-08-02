@@ -170,6 +170,41 @@ class LocalReplayStorage:
         await asyncio.to_thread(self._unlink_if_exists, path)
         await asyncio.to_thread(self._unlink_if_exists, self._part_path(path))
 
+    async def promote(self, temp_key: str, final_key: str) -> StoredObject:
+        temp_path = self.resolve_key(temp_key)
+        final_path = self.resolve_key(final_key)
+        if not await asyncio.to_thread(temp_path.is_file):
+            raise ReplayObjectNotFound(temp_key)
+
+        def _promote() -> tuple[int, str]:
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            hasher = hashlib.sha256()
+            with temp_path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(_RANGE_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+            os.replace(temp_path, final_path)
+            return final_path.stat().st_size, hasher.hexdigest()
+
+        size, digest = await asyncio.to_thread(_promote)
+        return StoredObject(key=final_key, size_bytes=size, sha256=digest)
+
+    async def delete_prefix(self, prefix: str) -> None:
+        validate_object_key(prefix)
+        path = (self._root / prefix).resolve()
+        if not path.is_relative_to(self._root):
+            raise InvalidReplayObjectKey(f"object key escapes storage root: {prefix!r}")
+        await asyncio.to_thread(self._remove_prefix, path)
+
+    @staticmethod
+    def _remove_prefix(path: Path) -> None:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        elif path.is_file() or path.is_symlink():
+            path.unlink()
+
     @staticmethod
     def _unlink_if_exists(path: Path) -> None:
         if path.is_file() or path.is_symlink():

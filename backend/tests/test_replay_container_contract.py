@@ -58,6 +58,50 @@ def test_compose_defines_independent_replay_worker_with_shared_replay_volume() -
         assert forbidden not in frontend
 
 
+def test_backend_image_runs_as_a_non_root_user() -> None:
+    """The API and worker containers must never run their process as root."""
+    dockerfile = (REPOSITORY_ROOT / "backend" / "Dockerfile").read_text()
+
+    assert "useradd" in dockerfile
+    assert re.search(r"^USER\s+(?!root\b)\S+", dockerfile, re.MULTILINE) is not None
+    # Ownership of the replay volume mountpoint must be seeded pre-mount so a
+    # non-root, read-only-root-filesystem worker can still write to it.
+    assert "chown" in dockerfile
+    assert REPLAY_MOUNT in dockerfile
+
+
+def test_worker_hardened_with_read_only_root_and_writable_scratch() -> None:
+    """The worker's root filesystem is read-only; scratch space comes from tmpfs."""
+    compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text()
+    worker = _service_block(compose, "replay-worker")
+
+    assert re.search(r"user:\s*[\"']?\d+:\d+[\"']?", worker) is not None
+    assert re.search(r"read_only:\s*true", worker) is not None
+    assert re.search(r"tmpfs:", worker) is not None
+    assert re.search(r"/tmp:size=\d+[A-Za-z]", worker) is not None
+    # The replay data volume must remain writable despite the read-only root.
+    assert f"replay_data:{REPLAY_MOUNT}" in worker
+
+
+def test_worker_has_a_stop_grace_period_for_draining_in_flight_jobs() -> None:
+    """SIGTERM must not be escalated to SIGKILL before an in-flight job can finish.
+
+    The worker itself already drains gracefully: `_consumer_loop` stops
+    claiming new jobs once `stop_event` is set but does not cancel the job
+    currently being processed (see `test_stop_event_stops_claiming_new_jobs`
+    in `test_replay_worker.py`). This only verifies Docker is configured to
+    give that in-flight job real wall-clock time before force-killing it.
+    """
+    compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text()
+    worker = _service_block(compose, "replay-worker")
+
+    match = re.search(r"stop_grace_period:\s*(\d+)([a-z]*)", worker)
+    assert match is not None
+    value, unit = match.groups()
+    seconds = int(value) * (60 if unit == "m" else 1)
+    assert seconds >= 60
+
+
 def test_env_example_keeps_replay_secrets_and_smoke_identity_empty() -> None:
     """Committed examples must never ship a replay token secret or smoke identity."""
     env_example = (REPOSITORY_ROOT / ".env.example").read_text().splitlines()

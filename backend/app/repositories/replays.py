@@ -63,6 +63,18 @@ class ReplayRepository(Protocol):
         values: Mapping[str, Any],
     ) -> ReplayUploadRow: ...
 
+    async def queue_process_job(
+        self,
+        *,
+        replay_id: UUID,
+        expected_statuses: Set[ReplayStatus],
+        expected_version: int,
+        status: ReplayStatus = ReplayStatus.QUEUED,
+        values: Mapping[str, Any],
+        available_at: datetime,
+        max_attempts: int = 3,
+    ) -> ReplayUploadRow: ...
+
     async def scrub_deleted(self, replay_id: UUID, *, now: datetime) -> ReplayUploadRow: ...
 
 
@@ -161,6 +173,61 @@ class SqlReplayRepository:
             row = (await session.execute(statement)).scalar_one_or_none()
             if row is None:
                 raise ReplayStateConflict("replay state or version precondition failed")
+            session.expunge(row)
+            return row
+
+    async def queue_process_job(
+        self,
+        *,
+        replay_id: UUID,
+        expected_statuses: Set[ReplayStatus],
+        expected_version: int,
+        status: ReplayStatus = ReplayStatus.QUEUED,
+        values: Mapping[str, Any],
+        available_at: datetime,
+        max_attempts: int = 3,
+    ) -> ReplayUploadRow:
+        """Atomically transition the replay row and enqueue its PROCESS job.
+
+        Both writes happen in the same PostgreSQL transaction so a status
+        transition can never be committed without its job (or vice versa).
+        The partial unique index on active jobs still guards against
+        duplicate active PROCESS jobs for the same replay.
+        """
+        now = datetime.now(UTC)
+        updates: dict[str, Any] = {
+            "status": status.value,
+            "version": expected_version + 1,
+            "updated_at": now,
+            **values,
+        }
+        statement = (
+            update(ReplayUploadRow)
+            .where(
+                ReplayUploadRow.id == replay_id,
+                ReplayUploadRow.version == expected_version,
+                ReplayUploadRow.status.in_([item.value for item in expected_statuses]),
+            )
+            .values(**updates)
+            .returning(ReplayUploadRow)
+        )
+        job_row = ReplayJobRow(
+            id=uuid4(),
+            replay_id=replay_id,
+            kind=ReplayJobKind.PROCESS.value,
+            status=ReplayJobStatus.PENDING.value,
+            attempt_count=0,
+            max_attempts=max_attempts,
+            available_at=available_at,
+            created_at=now,
+            updated_at=now,
+        )
+        async with self._session_factory.begin() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            if row is None:
+                raise ReplayStateConflict("replay state or version precondition failed")
+            session.add(job_row)
+            await session.flush()
             session.expunge(row)
             return row
 

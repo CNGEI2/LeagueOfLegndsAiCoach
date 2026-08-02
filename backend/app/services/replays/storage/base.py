@@ -46,6 +46,16 @@ def validate_object_key(key: str) -> str:
     return key
 
 
+def temp_upload_key(key: str) -> str:
+    """Derive the logical temporary key used for a client-driven direct upload.
+
+    The final key is only exposed to readers once ``promote`` copies the temp
+    object over it, so partially uploaded or abandoned uploads never appear at
+    the real location.
+    """
+    return f"tmp/{key}"
+
+
 class ReplayStorage(Protocol):
     async def create_upload_target(
         self,
@@ -72,3 +82,7 @@ class ReplayStorage(Protocol):
     def iter_range(self, key: str, start: int, end: int) -> AsyncIterator[bytes]: ...
 
     async def delete(self, key: str) -> None: ...
+
+    async def promote(self, temp_key: str, final_key: str) -> StoredObject: ...
+
+    async def delete_prefix(self, prefix: str) -> None: ...

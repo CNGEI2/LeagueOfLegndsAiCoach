@@ -29,6 +29,7 @@ from app.services.replays.security import issue_replay_token, verify_replay_toke
 from app.services.replays.storage.base import (
     ReplayObjectNotFound,
     ReplayStorage,
+    temp_upload_key,
 )
 
 
@@ -205,8 +206,17 @@ class ReplayService:
         source_object_key = f"source/{replay_id}/input"
         upload_url = f"/api/v1/replays/{replay_id}/content"
 
+        # Clients that upload directly to S3 via a presigned URL write to a
+        # temporary key first; complete() promotes it to the real source key
+        # only after validating the finished upload. Local uploads are proxied
+        # through our own API, so they can write the final key directly.
+        upload_target_key = (
+            temp_upload_key(source_object_key)
+            if self._settings.replay_storage_backend == "s3"
+            else source_object_key
+        )
         upload_target = await self._storage.create_upload_target(
-            source_object_key,
+            upload_target_key,
             expires_at=upload_expires_at,
             upload_url=upload_url,
             headers={},
@@ -323,7 +333,13 @@ class ReplayService:
             )
 
         try:
-            stored = await self._storage.stat(row.source_object_key)
+            if status == ReplayStatus.CREATED and self._settings.replay_storage_backend == "s3":
+                # The client uploaded directly to S3 under a temporary key; promote
+                # it to the real source key now that we are ready to validate it.
+                temp_key = temp_upload_key(row.source_object_key)
+                stored = await self._storage.promote(temp_key, row.source_object_key)
+            else:
+                stored = await self._storage.stat(row.source_object_key)
         except ReplayObjectNotFound as error:
             raise ApiError(
                 status_code=422,
@@ -339,9 +355,14 @@ class ReplayService:
                 retryable=True,
             ) from error
 
-        if stored.size_bytes > self._settings.replay_max_bytes:
-            raise replay_too_large()
-        if stored.size_bytes > row.declared_size_bytes:
+        if stored.size_bytes > self._settings.replay_max_bytes or (
+            stored.size_bytes > row.declared_size_bytes
+        ):
+            # The object was already promoted to the final key above; remove it
+            # so an invalid upload never lingers at the real source location.
+            await self._delete_missing_ok(row.source_object_key)
+            if stored.size_bytes > self._settings.replay_max_bytes:
+                raise replay_too_large()
             raise ApiError(
                 status_code=422,
                 code="REPLAY_UPLOAD_INVALID",
@@ -362,12 +383,7 @@ class ReplayService:
                 },
             )
 
-        await self._job_repository.enqueue(
-            replay_id=row.id,
-            kind=ReplayJobKind.PROCESS,
-            available_at=clock,
-        )
-        updated = await self._replay_repository.transition(
+        updated = await self._replay_repository.queue_process_job(
             replay_id=row.id,
             expected_statuses={ReplayStatus.UPLOADED},
             expected_version=row.version,
@@ -377,6 +393,7 @@ class ReplayService:
                 "source_sha256": stored.sha256,
                 "updated_at": clock,
             },
+            available_at=clock,
         )
         return _status_data(updated)
 
@@ -398,25 +415,40 @@ class ReplayService:
 
         expires_at = clock + _ARTIFACT_ACCESS_TTL
         artifacts = await self._artifact_repository.list_for_replay(replay_id)
-        return [
-            ReplayArtifactResponse(
-                artifact_id=artifact.id,
-                replay_id=artifact.replay_id,
-                kind=ReplayArtifactKind(artifact.kind),
-                game_time_ms=artifact.game_time_ms,
-                video_time_ms=artifact.video_time_ms,
-                media_type=artifact.media_type,
-                width=artifact.width,
-                height=artifact.height,
-                size_bytes=artifact.size_bytes,
-                access=ReplayArtifactAccess(
+        # Presigned-URL-capable backends (e.g. S3) let clients fetch derived
+        # artifacts directly, bypassing our API entirely; local storage has no
+        # such capability, so it keeps serving bearer-authenticated URLs.
+        create_download_target = getattr(self._storage, "create_download_target", None)
+        responses: list[ReplayArtifactResponse] = []
+        for artifact in artifacts:
+            if create_download_target is not None:
+                target = await create_download_target(artifact.object_key, expires_at=expires_at)
+                access = ReplayArtifactAccess(
+                    mode="presigned",
+                    url=target.url,
+                    expires_at=target.expires_at,
+                )
+            else:
+                access = ReplayArtifactAccess(
                     mode="bearer",
                     url=(f"/api/v1/replays/{artifact.replay_id}/artifacts/{artifact.id}/content"),
                     expires_at=expires_at,
-                ),
+                )
+            responses.append(
+                ReplayArtifactResponse(
+                    artifact_id=artifact.id,
+                    replay_id=artifact.replay_id,
+                    kind=ReplayArtifactKind(artifact.kind),
+                    game_time_ms=artifact.game_time_ms,
+                    video_time_ms=artifact.video_time_ms,
+                    media_type=artifact.media_type,
+                    width=artifact.width,
+                    height=artifact.height,
+                    size_bytes=artifact.size_bytes,
+                    access=access,
+                )
             )
-            for artifact in artifacts
-        ]
+        return responses
 
     async def get_ready_artifact_content(
         self, replay_id: UUID, artifact_id: UUID, token: str
@@ -470,12 +502,7 @@ class ReplayService:
                 retryable=True,
             ) from error
 
-        await self._job_repository.enqueue(
-            replay_id=row.id,
-            kind=ReplayJobKind.PROCESS,
-            available_at=clock,
-        )
-        updated = await self._replay_repository.transition(
+        updated = await self._replay_repository.queue_process_job(
             replay_id=row.id,
             expected_statuses={ReplayStatus.FAILED},
             expected_version=row.version,
@@ -487,6 +514,7 @@ class ReplayService:
                 "progress_percent": 0,
                 "updated_at": clock,
             },
+            available_at=clock,
         )
         return _status_data(updated)
 
@@ -522,6 +550,12 @@ class ReplayService:
             available_at=clock,
         )
         return _status_data(updated)
+
+    async def _delete_missing_ok(self, key: str) -> None:
+        try:
+            await self._storage.delete(key)
+        except ReplayObjectNotFound:
+            return
 
     async def _authorize(self, replay_id: UUID, token: str) -> ReplayUploadRow:
         if not token:

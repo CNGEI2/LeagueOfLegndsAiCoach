@@ -46,7 +46,7 @@ vi.mock("@/api/client", () => ({
 
 import { ApiClientError } from "@/api/client";
 import type { ReplayArtifactsResponse, ReplayStatusResponse } from "@/api/schemas";
-import { ReplaySection } from "@/components/replay-section";
+import { nextPollBackoffMs, ReplaySection } from "@/components/replay-section";
 import { getMessages } from "@/i18n/messages";
 import {
   loadReplayCapability,
@@ -170,6 +170,12 @@ async function selectValidFile(user: ReturnType<typeof userEvent.setup>) {
   return file;
 }
 
+async function selectFile(user: ReturnType<typeof userEvent.setup>, file: File) {
+  const input = screen.getByLabelText(getMessages("en-US").replayFileLabel);
+  await user.upload(input, file);
+  return file;
+}
+
 beforeEach(() => {
   installMemoryLocalStorage();
   vi.stubGlobal(
@@ -253,6 +259,89 @@ describe("ReplaySection upload gating and anchor", () => {
         expect.any(AbortSignal),
       );
     });
+  });
+});
+
+describe("ReplaySection upload expiry handling", () => {
+  it("shows the expired-upload error and returns to the upload form when the upload target already expired", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    renderSection();
+
+    await selectValidFile(user);
+    const video = screen.getByTestId("replay-video-preview") as HTMLVideoElement;
+    video.currentTime = 12;
+    await user.click(screen.getByRole("button", { name: messages.replaySetGameZero }));
+    await user.click(screen.getByRole("checkbox", { name: messages.replayRightsLabel }));
+
+    createReplayMock.mockResolvedValue({
+      replay_id: REPLAY_ID,
+      access_token: TOKEN,
+      status: "created",
+      upload: {
+        method: "PUT",
+        url: `/api/v1/replays/${REPLAY_ID}/content`,
+        headers: {},
+        expires_at: "2020-01-01T00:00:00+00:00",
+      },
+      retention: { source_hours_after_processing: 24, derived_days_after_ready: 7 },
+      request_id: SAFE_REQUEST_ID,
+    });
+    uploadReplayContentMock.mockRejectedValue(
+      new ApiClientError("REPLAY_UPLOAD_EXPIRED", {}, false, null),
+    );
+    // The recovered capability's own status effect fires once uploading stops;
+    // keep it pending so it doesn't interfere with this test's assertions.
+    getReplayStatusMock.mockImplementation(() => new Promise(() => {}));
+
+    await user.click(screen.getByRole("button", { name: messages.replayUpload }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(messages.replayUploadExpired);
+    expect(completeReplayMock).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: messages.replayUpload })).toBeInTheDocument();
+  });
+});
+
+describe("ReplaySection file type validation", () => {
+  it("accepts an .mkv file with a video/x-matroska MIME type", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    renderSection();
+
+    await selectFile(
+      user,
+      new File(["video-bytes"], "recording.mkv", { type: "video/x-matroska" }),
+    );
+
+    expect(screen.getByTestId("replay-video-preview")).toBeInTheDocument();
+    expect(screen.queryByText(messages.replayFileInvalidType)).not.toBeInTheDocument();
+  });
+
+  it("accepts a video file reported with an application/octet-stream MIME type", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    renderSection();
+
+    await selectFile(
+      user,
+      new File(["video-bytes"], "recording.mkv", { type: "application/octet-stream" }),
+    );
+
+    expect(screen.getByTestId("replay-video-preview")).toBeInTheDocument();
+    expect(screen.queryByText(messages.replayFileInvalidType)).not.toBeInTheDocument();
+  });
+
+  it("still rejects unsupported file extensions", async () => {
+    // Bypass the input's native accept-attribute filtering so we can exercise the
+    // component's own validation, mirroring browsers that still allow "all files".
+    const user = userEvent.setup({ applyAccept: false });
+    const messages = getMessages("en-US");
+    renderSection();
+
+    await selectFile(user, new File(["text-bytes"], "notes.txt", { type: "text/plain" }));
+
+    expect(screen.getByText(messages.replayFileInvalidType)).toBeVisible();
+    expect(screen.queryByTestId("replay-video-preview")).not.toBeInTheDocument();
   });
 });
 
@@ -362,6 +451,129 @@ describe("ReplaySection upload polling and refresh recovery", () => {
       expect.any(AbortSignal),
     );
     expect(screen.queryByTestId("replay-video-preview")).not.toBeInTheDocument();
+  });
+
+  it("keeps polling through repeated network errors with a capped exponential backoff, then recovers", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const messages = getMessages("en-US");
+    saveReplayCapability({
+      replayId: REPLAY_ID,
+      accessToken: TOKEN,
+      matchId: MATCH_ID,
+      updatedAt: "2026-08-01T15:00:00.000Z",
+    });
+
+    let call = 0;
+    getReplayStatusMock.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) {
+        return statusResponse({ status: "transcoding", progress_percent: 10 });
+      }
+      if (call <= 6) {
+        throw new ApiClientError("NETWORK_ERROR", {}, true, null);
+      }
+      return statusResponse({
+        status: "ready",
+        progress_percent: 100,
+        available_game_time_start_ms: 0,
+        available_game_time_end_ms: 1_800_000,
+      });
+    });
+    getReplayArtifactsMock.mockResolvedValue(artifactsResponse());
+    getReplayArtifactBlobMock.mockResolvedValue(new Blob(["jpeg"], { type: "image/jpeg" }));
+
+    renderSection();
+
+    // Initial one-shot status load (call 1) resolves with a non-terminal status.
+    await waitFor(() => expect(getReplayStatusMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText(messages.replayStageTranscoding)).toBeVisible());
+
+    // First poll attempt fires at the normal active interval (2s) and fails.
+    await vi.advanceTimersByTimeAsync(2000);
+    await waitFor(() => expect(getReplayStatusMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("alert")).toHaveTextContent(messages.replayNetworkError);
+    // Polling did not stop: the last known status stays visible instead of the
+    // error message replacing the whole panel.
+    expect(screen.getByText(messages.replayStageTranscoding)).toBeVisible();
+
+    // Backoff schedule: 2s, 4s, 8s, 16s, then capped at 30s. Each step uses the
+    // exact nominal delay (matching this suite's existing fake-timer pattern)
+    // rather than a razor's-edge boundary check, since waitFor's internal fake
+    // timer flushing can add a small amount of drift between assertions.
+    const expectedDelays = [2000, 4000, 8000, 16000, 30000];
+    for (const [index, delayMs] of expectedDelays.entries()) {
+      const expectedCallCount = index + 3;
+      await vi.advanceTimersByTimeAsync(delayMs);
+      await waitFor(() => expect(getReplayStatusMock).toHaveBeenCalledTimes(expectedCallCount));
+    }
+
+    await waitFor(() => expect(screen.getByText(messages.replayStageReady)).toBeVisible());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("recovers from a network error while the tab is hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const messages = getMessages("en-US");
+    saveReplayCapability({
+      replayId: REPLAY_ID,
+      accessToken: TOKEN,
+      matchId: MATCH_ID,
+      updatedAt: "2026-08-01T15:00:00.000Z",
+    });
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+
+    let call = 0;
+    getReplayStatusMock.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) {
+        return statusResponse({ status: "transcoding", progress_percent: 10 });
+      }
+      if (call === 2) {
+        throw new ApiClientError("NETWORK_ERROR", {}, true, null);
+      }
+      return statusResponse({ status: "transcoding", progress_percent: 20 });
+    });
+
+    try {
+      renderSection();
+      await waitFor(() => expect(getReplayStatusMock).toHaveBeenCalledTimes(1));
+
+      // Hidden-tab polling interval (10s) before the first failure.
+      await vi.advanceTimersByTimeAsync(10000);
+      await waitFor(() => expect(getReplayStatusMock).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole("alert")).toHaveTextContent(messages.replayNetworkError);
+
+      // Retries continue (using the hidden-tab base delay under the hood; the
+      // exact schedule is covered by the nextPollBackoffMs unit tests below).
+      await vi.advanceTimersByTimeAsync(10000);
+      await waitFor(() => expect(getReplayStatusMock).toHaveBeenCalledTimes(3));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    }
+  });
+});
+
+describe("nextPollBackoffMs", () => {
+  it("doubles from a 2s base and caps at 30s while the tab is visible", () => {
+    let backoff = 0;
+    for (const expected of [2000, 4000, 8000, 16000, 30000, 30000]) {
+      backoff = nextPollBackoffMs(backoff, false);
+      expect(backoff).toBe(expected);
+    }
+  });
+
+  it("uses a 10s base while hidden and still caps at 30s", () => {
+    let backoff = 0;
+    for (const expected of [10000, 20000, 30000, 30000]) {
+      backoff = nextPollBackoffMs(backoff, true);
+      expect(backoff).toBe(expected);
+    }
+  });
+
+  it("resets to the base delay after a successful poll (backoff of 0)", () => {
+    expect(nextPollBackoffMs(0, false)).toBe(2000);
+    expect(nextPollBackoffMs(0, true)).toBe(10000);
   });
 });
 

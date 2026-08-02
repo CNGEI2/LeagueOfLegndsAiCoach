@@ -18,6 +18,7 @@ class ApiError(Exception):
         message: str,
         params: dict[str, Any] | None = None,
         retryable: bool,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -25,6 +26,7 @@ class ApiError(Exception):
         self.message = message
         self.params = params or {}
         self.retryable = retryable
+        self.headers = headers or {}
 
 
 def replay_not_found() -> ApiError:
@@ -45,6 +47,22 @@ def replay_too_large() -> ApiError:
     )
 
 
+def replay_rate_limited(retry_after_seconds: float | None = None) -> ApiError:
+    params: dict[str, Any] = {}
+    headers: dict[str, str] = {}
+    if retry_after_seconds is not None:
+        params["retry_after_seconds"] = round(retry_after_seconds, 3)
+        headers["Retry-After"] = str(max(1, round(retry_after_seconds)))
+    return ApiError(
+        status_code=429,
+        code="REPLAY_RATE_LIMITED",
+        message="Too many replay requests. Please slow down and try again later.",
+        params=params,
+        retryable=True,
+        headers=headers,
+    )
+
+
 def _error_response(
     *,
     request: Request,
@@ -53,6 +71,7 @@ def _error_response(
     message: str,
     retryable: bool,
     params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     response = ErrorResponse(
         error=ErrorDetail(
@@ -63,7 +82,7 @@ def _error_response(
             request_id=request.state.request_id,
         )
     )
-    return JSONResponse(status_code=status_code, content=response.model_dump())
+    return JSONResponse(status_code=status_code, content=response.model_dump(), headers=headers)
 
 
 async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -75,6 +94,7 @@ async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:
             message=exc.message,
             params=exc.params,
             retryable=exc.retryable,
+            headers=exc.headers or None,
         )
     if isinstance(exc, RequestValidationError):
         return _error_response(

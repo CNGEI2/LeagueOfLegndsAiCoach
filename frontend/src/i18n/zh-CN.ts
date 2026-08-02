@@ -99,7 +99,7 @@ export const zhCN: Messages = {
   anchorFrame: "锚点帧",
   verificationFrameAlt: "游戏时间 {time} 的验证帧",
   anchorFrameAlt: "游戏时间 {time} 的锚点帧",
-  replayFileInvalidType: "请选择 MP4、WebM 或 MOV 视频文件。",
+  replayFileInvalidType: "请选择 MP4、WebM、MOV 或 MKV 视频文件。",
   replayFileTooLarge: "该文件超过 4 GiB，无法上传。",
   replayTokenStorageNotice: "回放访问凭证仅保存在本浏览器配置中；清除站点数据会失去访问权限。",
   replayRetentionNotice: "派生回放媒体将保留至 {date}。",
@@ -116,4 +116,5 @@ export const zhCN: Messages = {
   replayStorageUnavailable: "回放存储暂时不可用。",
   replayFfmpegUnavailable: "回放媒体处理暂时不可用。",
   replayRetryNotAllowed: "该回放无法重试。",
+  replayNetworkError: "连接已中断，正在重试…",
 };

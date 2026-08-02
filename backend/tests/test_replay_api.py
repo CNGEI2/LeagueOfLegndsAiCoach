@@ -91,7 +91,10 @@ def _upload_row(
         source_object_key=source_object_key,
         rights_statement_version="2026-08-01",
         rights_attested_at=NOW,
-        upload_expires_at=NOW + timedelta(minutes=30),
+        # The API checks this against the real wall clock (not the fixed NOW
+        # used elsewhere in this module), so it must stay in the future
+        # regardless of when the test suite actually runs.
+        upload_expires_at=datetime.now(UTC) + timedelta(minutes=30),
         warning_codes=[],
         created_at=NOW,
         updated_at=NOW,
@@ -123,6 +126,7 @@ class ControllableReplayService:
         self.retry_calls = 0
         self.delete_calls = 0
         self.mark_uploaded_calls: list[dict[str, object]] = []
+        self.mark_uploaded_error: Exception | None = None
         self.artifact_content: ReplayArtifactContent | None = ReplayArtifactContent(
             artifact_id=ARTIFACT_ID,
             media_type="video/mp4",
@@ -176,6 +180,8 @@ class ControllableReplayService:
     ) -> ReplayStatusData:
         del now
         await self.authorize(replay_id, token)
+        if self.mark_uploaded_error is not None:
+            raise self.mark_uploaded_error
         self.mark_uploaded_calls.append(
             {"replay_id": replay_id, "actual_size_bytes": actual_size_bytes}
         )
@@ -367,6 +373,30 @@ def test_local_put_streams_and_marks_uploaded(
     assert replay_storage.resolve_key(f"source/{REPLAY_ID}/input").read_bytes() == payload
 
 
+def test_local_put_deletes_written_object_when_mark_uploaded_fails(
+    replay_client: TestClient,
+    replay_service: ControllableReplayService,
+    replay_storage: LocalReplayStorage,
+    tmp_path: Path,
+) -> None:
+    replay_service.mark_uploaded_error = RuntimeError("database unavailable")
+    payload = b"0123456789"
+
+    response = replay_client.put(
+        f"/api/v1/replays/{REPLAY_ID}/content",
+        content=payload,
+        headers={**_auth(), "Content-Length": str(len(payload))},
+    )
+
+    assert response.status_code == 500
+    assert replay_service.mark_uploaded_calls == []
+    # The object written by the successful PUT must be cleaned up rather than
+    # left orphaned on disk once the DB transition fails, and no stray
+    # in-progress .part file should remain either.
+    assert not replay_storage.resolve_key(f"source/{REPLAY_ID}/input").exists()
+    assert not any((tmp_path / "source" / str(REPLAY_ID)).glob("*"))
+
+
 def test_local_put_rejects_oversize_content_length(replay_client: TestClient) -> None:
     response = replay_client.put(
         f"/api/v1/replays/{REPLAY_ID}/content",
@@ -376,6 +406,28 @@ def test_local_put_rejects_oversize_content_length(replay_client: TestClient) ->
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "REPLAY_TOO_LARGE"
+
+
+def test_local_put_rejects_upload_past_expiry_before_writing_bytes(
+    replay_client: TestClient,
+    replay_service: ControllableReplayService,
+    replay_storage: LocalReplayStorage,
+) -> None:
+    # Use a date far in the past so the check is deterministic regardless of
+    # the real wall-clock time the test happens to run at.
+    replay_service.authorize_row.upload_expires_at = datetime(2020, 1, 1, tzinfo=UTC)
+    payload = b"0123456789"
+
+    response = replay_client.put(
+        f"/api/v1/replays/{REPLAY_ID}/content",
+        content=payload,
+        headers={**_auth(), "Content-Length": str(len(payload))},
+    )
+
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "REPLAY_UPLOAD_EXPIRED"
+    assert not replay_storage.resolve_key(f"source/{REPLAY_ID}/input").exists()
+    assert replay_service.mark_uploaded_calls == []
 
 
 @pytest.mark.asyncio

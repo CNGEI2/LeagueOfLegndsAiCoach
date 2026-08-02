@@ -101,7 +101,7 @@ export const enUS = {
   anchorFrame: "Anchor frame",
   verificationFrameAlt: "Verification frame at game time {time}",
   anchorFrameAlt: "Anchor frame at game time {time}",
-  replayFileInvalidType: "Choose an MP4, WebM, or MOV video file.",
+  replayFileInvalidType: "Choose an MP4, WebM, MOV, or MKV video file.",
   replayFileTooLarge: "This file is larger than 4 GiB and cannot be uploaded.",
   replayTokenStorageNotice:
     "Replay access is stored only in this browser profile. Clearing site data removes access.",
@@ -119,4 +119,5 @@ export const enUS = {
   replayStorageUnavailable: "Replay storage is temporarily unavailable.",
   replayFfmpegUnavailable: "Replay media processing is temporarily unavailable.",
   replayRetryNotAllowed: "This replay cannot be retried.",
+  replayNetworkError: "Connection lost. Retrying…",
 } as const;

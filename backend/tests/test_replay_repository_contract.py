@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -496,3 +497,159 @@ async def test_get_for_replay_binding_ignores_riot_cache_ttl(session_factory) ->
         )
         is None
     )
+
+
+async def _count_active_process_jobs(session_factory, replay_id: object) -> int:
+    async with session_factory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(ReplayJobRow).where(
+                        ReplayJobRow.replay_id == replay_id,
+                        ReplayJobRow.kind == ReplayJobKind.PROCESS.value,
+                        ReplayJobRow.status.in_(
+                            (
+                                ReplayJobStatus.PENDING.value,
+                                ReplayJobStatus.RUNNING.value,
+                                ReplayJobStatus.RETRY_SCHEDULED.value,
+                            )
+                        ),
+                    )
+                )
+            ).scalars()
+        )
+    return len(rows)
+
+
+@pytest.mark.asyncio
+async def test_queue_process_job_transitions_and_enqueues_atomically(session_factory) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    replay = await replays.create(make_replay(status=ReplayStatus.UPLOADED.value))
+
+    updated = await replays.queue_process_job(
+        replay_id=replay.id,
+        expected_statuses={ReplayStatus.UPLOADED},
+        expected_version=replay.version,
+        status=ReplayStatus.QUEUED,
+        values={"updated_at": now},
+        available_at=now,
+    )
+    assert updated.status == ReplayStatus.QUEUED.value
+    assert updated.version == replay.version + 1
+    assert await _count_active_process_jobs(session_factory, replay.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_process_job_duplicate_complete_does_not_create_second_job(
+    session_factory,
+) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    replay = await replays.create(make_replay(status=ReplayStatus.UPLOADED.value))
+
+    first = await replays.queue_process_job(
+        replay_id=replay.id,
+        expected_statuses={ReplayStatus.UPLOADED},
+        expected_version=replay.version,
+        status=ReplayStatus.QUEUED,
+        values={"updated_at": now},
+        available_at=now,
+    )
+    assert first.status == ReplayStatus.QUEUED.value
+
+    # A second "complete" call using the stale pre-transition version/status must not
+    # transition the row nor create a second active PROCESS job.
+    with pytest.raises(ReplayStateConflict):
+        await replays.queue_process_job(
+            replay_id=replay.id,
+            expected_statuses={ReplayStatus.UPLOADED},
+            expected_version=replay.version,
+            status=ReplayStatus.QUEUED,
+            values={"updated_at": now},
+            available_at=now,
+        )
+
+    assert await _count_active_process_jobs(session_factory, replay.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_process_job_concurrent_completes_only_one_succeeds(session_factory) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    replay = await replays.create(make_replay(status=ReplayStatus.UPLOADED.value))
+
+    async def _attempt() -> ReplayUploadRow | Exception:
+        try:
+            return await replays.queue_process_job(
+                replay_id=replay.id,
+                expected_statuses={ReplayStatus.UPLOADED},
+                expected_version=replay.version,
+                status=ReplayStatus.QUEUED,
+                values={"updated_at": now},
+                available_at=now,
+            )
+        except ReplayStateConflict as error:
+            return error
+
+    results = await asyncio.gather(_attempt(), _attempt())
+    successes = [item for item in results if isinstance(item, ReplayUploadRow)]
+    failures = [item for item in results if isinstance(item, ReplayStateConflict)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert successes[0].status == ReplayStatus.QUEUED.value
+    assert await _count_active_process_jobs(session_factory, replay.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_process_job_retry_creates_exactly_one_job_in_same_transaction(
+    session_factory,
+) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    replay = await replays.create(
+        make_replay(
+            status=ReplayStatus.FAILED.value,
+            error_code="REPLAY_PROCESSING_FAILED",
+            error_retryable=True,
+        )
+    )
+
+    retried = await replays.queue_process_job(
+        replay_id=replay.id,
+        expected_statuses={ReplayStatus.FAILED},
+        expected_version=replay.version,
+        status=ReplayStatus.QUEUED,
+        values={
+            "error_code": None,
+            "error_retryable": None,
+            "progress_percent": 0,
+            "updated_at": now,
+        },
+        available_at=now,
+    )
+    assert retried.status == ReplayStatus.QUEUED.value
+    assert retried.error_code is None
+    assert await _count_active_process_jobs(session_factory, replay.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_process_job_failed_transition_creates_no_job(session_factory) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    replay = await replays.create(make_replay(status=ReplayStatus.READY.value))
+
+    with pytest.raises(ReplayStateConflict):
+        await replays.queue_process_job(
+            replay_id=replay.id,
+            expected_statuses={ReplayStatus.FAILED},
+            expected_version=replay.version,
+            status=ReplayStatus.QUEUED,
+            values={"updated_at": now},
+            available_at=now,
+        )
+
+    assert await _count_active_process_jobs(session_factory, replay.id) == 0
+    async with session_factory() as session:
+        job_rows = list((await session.execute(select(ReplayJobRow))).scalars())
+    assert job_rows == []

@@ -73,6 +73,25 @@ def test_production_replay_requires_gateway_rate_limits() -> None:
     assert settings.replay_gateway_rate_limits_enforced is True
 
 
+def test_replay_gateway_rate_limit_defaults_match_the_documented_limits() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.replay_gateway_rate_limits_enforced is False
+    assert settings.replay_gateway_create_limit_per_hour == 5
+    assert settings.replay_gateway_upload_concurrency_limit == 2
+    assert settings.replay_gateway_request_limit_per_minute == 60
+    assert settings.replay_trusted_proxy_networks == ()
+
+
+def test_replay_trusted_proxy_cidrs_parses_comma_separated_networks() -> None:
+    settings = Settings(_env_file=None, replay_trusted_proxy_cidrs="10.0.0.0/8, 172.16.0.0/12")
+
+    networks = settings.replay_trusted_proxy_networks
+    assert len(networks) == 2
+    assert str(networks[0]) == "10.0.0.0/8"
+    assert str(networks[1]) == "172.16.0.0/12"
+
+
 def test_unknown_replay_storage_backend_is_rejected_by_pydantic() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, replay_storage_backend="gcs")  # type: ignore[arg-type]

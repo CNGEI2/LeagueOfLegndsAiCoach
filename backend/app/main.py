@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.health import router as health_router
+from app.api.internal import router as internal_router
 from app.api.matches import router as matches_router
 from app.api.players import router as players_router
 from app.api.replays import router as replays_router
@@ -14,7 +15,10 @@ from app.core.config import Settings
 from app.core.database import Database, DatabaseProtocol
 from app.core.dependencies import AppServices, build_services
 from app.core.errors import ApiError, UnhandledExceptionMiddleware, api_error_handler
+from app.core.metrics import MetricsRegistry
+from app.core.metrics import metrics as default_metrics
 from app.core.request_id import RequestIdMiddleware
+from app.services.replays.rate_limit import ReplayGatewayRateLimiter, build_rate_limiter
 from app.services.replays.storage.base import ReplayStorage
 from app.services.replays.storage.local import LocalReplayStorage
 
@@ -24,6 +28,8 @@ def create_app(
     database: DatabaseProtocol | None = None,
     services: AppServices | None = None,
     replay_storage: ReplayStorage | None = None,
+    replay_rate_limiter: ReplayGatewayRateLimiter | None = None,
+    replay_metrics: MetricsRegistry | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings()
     resolved_database = database or Database(resolved_settings.database_url)
@@ -41,6 +47,9 @@ def create_app(
     else:
         resolved_storage = None
 
+    resolved_rate_limiter = replay_rate_limiter or build_rate_limiter(resolved_settings)
+    resolved_metrics = replay_metrics or default_metrics
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.database = resolved_database
@@ -55,6 +64,8 @@ def create_app(
     application = FastAPI(title="LoL AI Coach API", version="0.1.0", lifespan=lifespan)
     application.state.settings = resolved_settings
     application.state.replay_storage = resolved_storage
+    application.state.replay_rate_limiter = resolved_rate_limiter
+    application.state.replay_metrics = resolved_metrics
     application.add_exception_handler(ApiError, api_error_handler)
     application.add_exception_handler(RequestValidationError, api_error_handler)
     application.add_exception_handler(StarletteHTTPException, api_error_handler)
@@ -69,6 +80,7 @@ def create_app(
     )
     application.add_middleware(RequestIdMiddleware)
     application.include_router(health_router)
+    application.include_router(internal_router)
     application.include_router(players_router)
     application.include_router(matches_router)
     application.include_router(replays_router)

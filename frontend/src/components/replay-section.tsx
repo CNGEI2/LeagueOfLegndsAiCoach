@@ -29,8 +29,17 @@ const RIGHTS_STATEMENT_VERSION = "2026-08-01";
 const STORAGE_KEY_PREFIX = "lol-ai-coach:replay:";
 const ACTIVE_POLL_MS = 2000;
 const HIDDEN_POLL_MS = 10000;
+const BACKOFF_BASE_MS = 2000;
+const BACKOFF_MAX_MS = 30000;
 
 const TERMINAL_STATUSES = new Set(["ready", "failed", "deleted", "expired"]);
+
+// Exported for direct unit testing of the retry schedule without relying on
+// fragile fake-timer boundary assertions.
+export function nextPollBackoffMs(previousBackoffMs: number, hidden: boolean): number {
+  const base = hidden ? HIDDEN_POLL_MS : BACKOFF_BASE_MS;
+  return previousBackoffMs === 0 ? base : Math.min(previousBackoffMs * 2, BACKOFF_MAX_MS);
+}
 
 function findCapabilityForMatch(matchId: string): ReplayCapability | null {
   let best: ReplayCapability | null = null;
@@ -80,7 +89,7 @@ function messageForReplayError(code: string | undefined, messages: Messages): st
     case "INVALID_API_RESPONSE":
       return messages.invalidApiResponse;
     case "NETWORK_ERROR":
-      return messages.riotUnavailable;
+      return messages.replayNetworkError;
     default:
       return messages.replayProcessingFailed;
   }
@@ -224,6 +233,7 @@ export function ReplaySection({
 
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let backoffMs = 0;
 
     const poll = async () => {
       try {
@@ -232,6 +242,7 @@ export function ReplaySection({
           controller.signal,
         );
         if (controller.signal.aborted) return;
+        backoffMs = 0;
         applyStatus(next, capability.accessToken, capability.replayId);
         if (next.status === "ready") {
           void loadArtifacts(capability.replayId, capability.accessToken, controller.signal);
@@ -257,6 +268,15 @@ export function ReplaySection({
             messages,
           ),
         );
+        // Network errors are transient: keep polling with a capped exponential
+        // backoff instead of giving up. Other error codes (e.g. not-found,
+        // storage unavailable) stop polling as before.
+        if (error instanceof ApiClientError && error.code === "NETWORK_ERROR") {
+          backoffMs = nextPollBackoffMs(backoffMs, document.hidden);
+          timer = setTimeout(() => {
+            void poll();
+          }, backoffMs);
+        }
       }
     };
 

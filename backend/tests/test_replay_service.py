@@ -110,6 +110,7 @@ class FakeMatchRepository:
 @dataclass
 class FakeReplayRepository:
     rows: dict[UUID, ReplayUploadRow] = field(default_factory=dict)
+    job_repository: FakeReplayJobRepository | None = None
 
     async def create(self, row: ReplayUploadRow) -> ReplayUploadRow:
         self.rows[row.id] = row
@@ -130,6 +131,37 @@ class FakeReplayRepository:
         row = self.rows[replay_id]
         if row.version != expected_version or ReplayStatus(row.status) not in expected_statuses:
             raise AssertionError("replay state or version precondition failed")
+        for key, value in values.items():
+            setattr(row, key, value)
+        row.status = status.value
+        row.version = expected_version + 1
+        row.updated_at = NOW
+        return row
+
+    async def queue_process_job(
+        self,
+        *,
+        replay_id: UUID,
+        expected_statuses: Set[ReplayStatus],
+        expected_version: int,
+        status: ReplayStatus = ReplayStatus.QUEUED,
+        values: Mapping[str, Any],
+        available_at: datetime,
+        max_attempts: int = 3,
+    ) -> ReplayUploadRow:
+        # Mirrors the real repository: the transition and job creation are treated
+        # as a single atomic unit, so the job is only ever appended after (and
+        # alongside) a successful transition, never on its own.
+        row = self.rows[replay_id]
+        if row.version != expected_version or ReplayStatus(row.status) not in expected_statuses:
+            raise AssertionError("replay state or version precondition failed")
+        if self.job_repository is not None:
+            await self.job_repository.enqueue(
+                replay_id=replay_id,
+                kind=ReplayJobKind.PROCESS,
+                available_at=available_at,
+                max_attempts=max_attempts,
+            )
         for key, value in values.items():
             setattr(row, key, value)
         row.status = status.value
@@ -237,6 +269,8 @@ class FakeReplayArtifactRepository:
 class FakeReplayStorage:
     objects: dict[str, StoredObject] = field(default_factory=dict)
     upload_targets: list[dict[str, object]] = field(default_factory=list)
+    promote_calls: list[tuple[str, str]] = field(default_factory=list)
+    deleted_keys: list[str] = field(default_factory=list)
 
     async def create_upload_target(
         self,
@@ -279,7 +313,44 @@ class FakeReplayStorage:
         raise AssertionError("iter_range should not be called from ReplayService")
 
     async def delete(self, key: str) -> None:
-        raise AssertionError("delete should not be called from ReplayService")
+        self.deleted_keys.append(key)
+        if key not in self.objects:
+            raise ReplayObjectNotFound(key)
+        del self.objects[key]
+
+    async def promote(self, temp_key: str, final_key: str) -> StoredObject:
+        self.promote_calls.append((temp_key, final_key))
+        if temp_key not in self.objects:
+            raise ReplayObjectNotFound(temp_key)
+        source = self.objects.pop(temp_key)
+        promoted = StoredObject(key=final_key, size_bytes=source.size_bytes, sha256=source.sha256)
+        self.objects[final_key] = promoted
+        return promoted
+
+    async def delete_prefix(self, prefix: str) -> None:
+        raise AssertionError("delete_prefix should not be called from ReplayService")
+
+
+@dataclass
+class FakePresignedReplayStorage(FakeReplayStorage):
+    """A storage double that, like S3, can mint presigned download URLs."""
+
+    download_targets: list[dict[str, object]] = field(default_factory=list)
+
+    async def create_download_target(
+        self,
+        key: str,
+        *,
+        expires_at: datetime,
+        headers: Mapping[str, str] | None = None,
+    ) -> UploadTarget:
+        self.download_targets.append({"key": key, "expires_at": expires_at})
+        return UploadTarget(
+            method="GET",
+            url=f"https://s3.example.invalid/{key}",
+            headers=dict(headers or {}),
+            expires_at=expires_at,
+        )
 
 
 def _service(
@@ -301,6 +372,7 @@ def _service(
     match_repository = match_repo or FakeMatchRepository(snapshot=_snapshot())
     replay_repository = replay_repo or FakeReplayRepository()
     job_repository = job_repo or FakeReplayJobRepository()
+    replay_repository.job_repository = job_repository
     artifact_repository = artifact_repo or FakeReplayArtifactRepository()
     replay_storage = storage or FakeReplayStorage()
     service = ReplayService(
@@ -514,6 +586,92 @@ async def test_complete_from_created_transitions_through_uploaded() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_targets_temp_key_for_s3_backend_and_stores_final_key() -> None:
+    service, _, replay_repo, _, _, storage = _service(
+        settings=_settings(replay_storage_backend="s3")
+    )
+    created = await service.create(_create_request(), now=NOW)
+
+    stored = await replay_repo.get(created.replay_id)
+    assert stored is not None
+    final_key = stored.source_object_key
+    assert final_key is not None
+    assert storage.upload_targets[0]["key"] == f"tmp/{final_key}"
+    # The DB always tracks the real (final) key so downstream processing never
+    # has to know about the temporary upload location.
+    assert not final_key.startswith("tmp/")
+
+
+@pytest.mark.asyncio
+async def test_create_targets_final_key_directly_for_local_backend() -> None:
+    service, _, replay_repo, _, _, storage = _service(
+        settings=_settings(replay_storage_backend="local")
+    )
+    created = await service.create(_create_request(), now=NOW)
+
+    stored = await replay_repo.get(created.replay_id)
+    assert stored is not None
+    assert storage.upload_targets[0]["key"] == stored.source_object_key
+
+
+@pytest.mark.asyncio
+async def test_complete_promotes_temp_object_to_final_key_for_s3_backend() -> None:
+    service, _, replay_repo, job_repo, _, storage = _service(
+        settings=_settings(replay_storage_backend="s3")
+    )
+    row, token = await _seed_replay(replay_repo, status=ReplayStatus.CREATED)
+    assert row.source_object_key is not None
+    temp_key = f"tmp/{row.source_object_key}"
+    storage.objects[temp_key] = StoredObject(key=temp_key, size_bytes=1_000_000, sha256="a" * 64)
+
+    result = await service.complete(row.id, token, now=NOW)
+
+    assert result.status == ReplayStatus.QUEUED
+    assert storage.promote_calls == [(temp_key, row.source_object_key)]
+    assert temp_key not in storage.objects
+    assert row.source_object_key in storage.objects
+    assert len(job_repo.jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_complete_rejects_and_cleans_up_when_promoted_object_exceeds_declared_size() -> None:
+    service, _, replay_repo, _, _, storage = _service(
+        settings=_settings(replay_storage_backend="s3"),
+    )
+    row, token = await _seed_replay(
+        replay_repo, status=ReplayStatus.CREATED, declared_size_bytes=10
+    )
+    assert row.source_object_key is not None
+    temp_key = f"tmp/{row.source_object_key}"
+    storage.objects[temp_key] = StoredObject(key=temp_key, size_bytes=1_000, sha256="a" * 64)
+
+    with pytest.raises(ApiError) as raised:
+        await service.complete(row.id, token, now=NOW)
+
+    assert raised.value.code == "REPLAY_UPLOAD_INVALID"
+    # The invalid object must not linger at the real source key once rejected.
+    assert row.source_object_key not in storage.objects
+    assert row.source_object_key in storage.deleted_keys
+
+
+@pytest.mark.asyncio
+async def test_complete_uses_stat_without_promoting_for_local_backend() -> None:
+    service, _, replay_repo, job_repo, _, storage = _service(
+        settings=_settings(replay_storage_backend="local")
+    )
+    row, token = await _seed_replay(replay_repo, status=ReplayStatus.CREATED)
+    assert row.source_object_key is not None
+    storage.objects[row.source_object_key] = StoredObject(
+        key=row.source_object_key, size_bytes=1_000_000, sha256="a" * 64
+    )
+
+    result = await service.complete(row.id, token, now=NOW)
+
+    assert result.status == ReplayStatus.QUEUED
+    assert storage.promote_calls == []
+
+
+@pytest.mark.asyncio
 async def test_retry_requires_failed_retryable_source() -> None:
     service, _, replay_repo, job_repo, _, storage = _service()
     row, token = await _seed_replay(
@@ -625,6 +783,43 @@ async def test_list_artifacts_returns_public_access_objects() -> None:
 
     artifacts = await service.list_artifacts(row.id, token, now=NOW)
     assert len(artifacts) == 1
-    assert artifacts[0].kind == ReplayArtifactKind.ANCHOR_FRAME
     assert artifacts[0].access.mode == "bearer"
+
+
+@pytest.mark.asyncio
+async def test_list_artifacts_returns_presigned_access_for_presign_capable_storage() -> None:
+    storage = FakePresignedReplayStorage()
+    service, _, replay_repo, _, artifact_repo, _ = _service(
+        storage=storage, settings=_settings(replay_storage_backend="s3")
+    )
+    row, token = await _seed_replay(replay_repo, status=ReplayStatus.READY)
+    artifact_repo.rows.append(
+        ReplayArtifactRow(
+            id=uuid4(),
+            replay_id=row.id,
+            kind=ReplayArtifactKind.ANCHOR_FRAME.value,
+            game_time_ms=0,
+            video_time_ms=48231,
+            object_key="frames/abc/anchor",
+            sha256="c" * 64,
+            media_type="image/jpeg",
+            size_bytes=100,
+            width=1280,
+            height=720,
+            duration_ms=None,
+            created_at=NOW,
+            delete_after=NOW + timedelta(days=7),
+        )
+    )
+
+    artifacts = await service.list_artifacts(row.id, token, now=NOW)
+
+    assert len(artifacts) == 1
+    assert artifacts[0].access.mode == "presigned"
+    assert artifacts[0].access.url == "https://s3.example.invalid/frames/abc/anchor"
+    assert artifacts[0].access.expires_at == NOW + timedelta(minutes=5)
+    assert storage.download_targets == [
+        {"key": "frames/abc/anchor", "expires_at": NOW + timedelta(minutes=5)}
+    ]
+    assert artifacts[0].kind == ReplayArtifactKind.ANCHOR_FRAME
     assert "object_key" not in artifacts[0].model_dump()

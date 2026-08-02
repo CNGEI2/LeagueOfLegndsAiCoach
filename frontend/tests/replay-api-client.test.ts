@@ -24,6 +24,10 @@ const ARTIFACT_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const TOKEN = "possession-token-value";
 const SAFE_REQUEST_ID = "a3f4c1d2e5b67890a1b2c3d4e5f60718";
 
+function futureIso(msFromNow = 30 * 60 * 1000): string {
+  return new Date(Date.now() + msFromNow).toISOString();
+}
+
 function validCreateResponse(overrides: Record<string, unknown> = {}) {
   return {
     replay_id: REPLAY_ID,
@@ -33,7 +37,7 @@ function validCreateResponse(overrides: Record<string, unknown> = {}) {
       method: "PUT",
       url: `/api/v1/replays/${REPLAY_ID}/content`,
       headers: {},
-      expires_at: "2026-08-01T15:30:00+00:00",
+      expires_at: futureIso(),
     },
     retention: {
       source_hours_after_processing: 24,
@@ -316,7 +320,7 @@ describe("replay API client", () => {
         method: "PUT",
         url: `/api/v1/replays/${REPLAY_ID}/content`,
         headers: { "Content-Type": "video/mp4" },
-        expires_at: "2026-08-01T15:30:00+00:00",
+        expires_at: futureIso(),
       },
       accessToken: TOKEN,
       body: new Blob(["abc"]),
@@ -358,7 +362,7 @@ describe("replay API client", () => {
         method: "PUT",
         url: `/api/v1/replays/${REPLAY_ID}/content`,
         headers: {},
-        expires_at: "2026-08-01T15:30:00+00:00",
+        expires_at: futureIso(),
       },
       accessToken: TOKEN,
       body: new Blob(["abc"]),
@@ -398,7 +402,7 @@ describe("replay API client", () => {
         method: "PUT",
         url: "https://s3.example/bucket/object?X-Amz-Signature=abc",
         headers: { "Content-Type": "video/mp4", "x-amz-acl": "private" },
-        expires_at: "2026-08-01T15:30:00+00:00",
+        expires_at: futureIso(),
       },
       accessToken: TOKEN,
       body: new Blob(["abc"]),
@@ -407,6 +411,110 @@ describe("replay API client", () => {
     expect(setRequestHeader).toHaveBeenCalledWith("Content-Type", "video/mp4");
     expect(setRequestHeader).toHaveBeenCalledWith("x-amz-acl", "private");
     expect(setRequestHeader).not.toHaveBeenCalledWith("Authorization", expect.anything());
+  });
+
+  it("rejects a local upload without sending bytes when expires_at has already passed", async () => {
+    const xhrCtor = vi.fn();
+    vi.stubGlobal("XMLHttpRequest", xhrCtor as unknown as typeof XMLHttpRequest);
+
+    await expect(
+      uploadReplayContent({
+        upload: {
+          method: "PUT",
+          url: `/api/v1/replays/${REPLAY_ID}/content`,
+          headers: {},
+          expires_at: new Date(Date.now() - 60_000).toISOString(),
+        },
+        accessToken: TOKEN,
+        body: new Blob(["abc"]),
+      }),
+    ).rejects.toMatchObject({ code: "REPLAY_UPLOAD_EXPIRED" });
+
+    expect(xhrCtor).not.toHaveBeenCalled();
+  });
+
+  it("rejects a local upload within the clock-skew window before expiry, without sending bytes", async () => {
+    const xhrCtor = vi.fn();
+    vi.stubGlobal("XMLHttpRequest", xhrCtor as unknown as typeof XMLHttpRequest);
+
+    await expect(
+      uploadReplayContent({
+        upload: {
+          method: "PUT",
+          url: `/api/v1/replays/${REPLAY_ID}/content`,
+          headers: {},
+          expires_at: new Date(Date.now() + 1_000).toISOString(),
+        },
+        accessToken: TOKEN,
+        body: new Blob(["abc"]),
+      }),
+    ).rejects.toMatchObject({ code: "REPLAY_UPLOAD_EXPIRED" });
+
+    expect(xhrCtor).not.toHaveBeenCalled();
+  });
+
+  it("still starts a local upload once comfortably before expiry", async () => {
+    let loadHandler: (() => void) | null = null;
+    class OkXHR {
+      upload = { onprogress: null };
+      status = 204;
+      open = vi.fn();
+      send = vi.fn(() => loadHandler?.());
+      abort = vi.fn();
+      setRequestHeader = vi.fn();
+      set onload(handler: (() => void) | null) {
+        loadHandler = handler;
+      }
+      set onabort(_handler: (() => void) | null) {}
+      set onerror(_handler: (() => void) | null) {}
+      set ontimeout(_handler: (() => void) | null) {}
+    }
+    vi.stubGlobal("XMLHttpRequest", vi.fn(() => new OkXHR()) as unknown as typeof XMLHttpRequest);
+
+    await expect(
+      uploadReplayContent({
+        upload: {
+          method: "PUT",
+          url: `/api/v1/replays/${REPLAY_ID}/content`,
+          headers: {},
+          expires_at: futureIso(),
+        },
+        accessToken: TOKEN,
+        body: new Blob(["abc"]),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not require a fresh expiry for absolute (presigned) upload URLs", async () => {
+    let loadHandler: (() => void) | null = null;
+    class OkXHR {
+      upload = { onprogress: null };
+      status = 200;
+      open = vi.fn();
+      send = vi.fn(() => loadHandler?.());
+      abort = vi.fn();
+      setRequestHeader = vi.fn();
+      set onload(handler: (() => void) | null) {
+        loadHandler = handler;
+      }
+      set onabort(_handler: (() => void) | null) {}
+      set onerror(_handler: (() => void) | null) {}
+      set ontimeout(_handler: (() => void) | null) {}
+    }
+    vi.stubGlobal("XMLHttpRequest", vi.fn(() => new OkXHR()) as unknown as typeof XMLHttpRequest);
+
+    await expect(
+      uploadReplayContent({
+        upload: {
+          method: "PUT",
+          url: "https://s3.example/bucket/object?X-Amz-Signature=abc",
+          headers: {},
+          expires_at: new Date(Date.now() - 60_000).toISOString(),
+        },
+        accessToken: TOKEN,
+        body: new Blob(["abc"]),
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("fetches bearer artifact blobs and rejects non-jpeg frames", async () => {

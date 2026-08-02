@@ -36,6 +36,7 @@ asyncio_mode = "auto"
 markers = [
   "integration: requires TEST_DATABASE_URL pointing to a dedicated PostgreSQL test database",
   "replay_ffmpeg: requires ffmpeg and ffprobe binaries",
+  "replay_s3: requires REPLAY_S3_TEST_ENDPOINT pointing to a MinIO/S3-compatible service",
 ]
 
 [tool.ruff]

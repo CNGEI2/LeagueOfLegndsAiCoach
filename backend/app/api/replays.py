@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Annotated, cast
 from uuid import UUID
 
@@ -10,8 +12,10 @@ from fastapi.responses import StreamingResponse
 
 from app.core.config import Settings
 from app.core.dependencies import AppServices, get_services
-from app.core.errors import ApiError, replay_not_found, replay_too_large
+from app.core.errors import ApiError, replay_not_found, replay_rate_limited, replay_too_large
 from app.core.logging import bind_safe_request_context
+from app.core.metrics import MetricsRegistry
+from app.core.metrics import metrics as default_metrics
 from app.schemas.replays import (
     ReplayArtifactsResponse,
     ReplayCreateRequest,
@@ -19,13 +23,12 @@ from app.schemas.replays import (
     ReplayStatusResponse,
 )
 from app.services.replays.domain import ReplayStatus
-from app.services.replays.storage.base import ReplayObjectTooLarge, ReplayStorage
-
-router = APIRouter(
-    prefix="/api/v1/replays",
-    tags=["replays"],
-    dependencies=[Depends(bind_safe_request_context)],
+from app.services.replays.rate_limit import (
+    ReplayGatewayRateLimiter,
+    ReplayRateLimitExceeded,
+    resolve_client_ip,
 )
+from app.services.replays.storage.base import ReplayObjectTooLarge, ReplayStorage
 
 _MAX_TOKEN_LENGTH = 512
 _RANGE_RE = re.compile(r"^bytes=(\d+)-(\d*)$")
@@ -45,6 +48,81 @@ def _storage(request: Request) -> ReplayStorage:
             retryable=False,
         )
     return cast(ReplayStorage, storage)
+
+
+def _metrics(request: Request) -> MetricsRegistry:
+    registry = getattr(request.app.state, "replay_metrics", None)
+    return cast(MetricsRegistry, registry) if registry is not None else default_metrics
+
+
+def _rate_limiter(request: Request) -> ReplayGatewayRateLimiter | None:
+    return cast(
+        ReplayGatewayRateLimiter | None, getattr(request.app.state, "replay_rate_limiter", None)
+    )
+
+
+def _client_key(request: Request) -> str:
+    return resolve_client_ip(request, _settings(request))
+
+
+async def enforce_gateway_rate_limit(request: Request) -> None:
+    """Enforce the 60/minute ordinary-request limit for every replay route."""
+    settings = _settings(request)
+    if not settings.replay_gateway_rate_limits_enforced:
+        return
+    limiter = _rate_limiter(request)
+    if limiter is None:
+        return
+    try:
+        limiter.check_request(_client_key(request))
+    except ReplayRateLimitExceeded as error:
+        _metrics(request).replay_rate_limit_rejections_total.inc(limit="requests_per_minute")
+        raise replay_rate_limited(error.retry_after_seconds) from error
+
+
+async def enforce_create_rate_limit(request: Request) -> None:
+    """Enforce the 5/hour replay-create limit, in addition to the request limit."""
+    settings = _settings(request)
+    if not settings.replay_gateway_rate_limits_enforced:
+        return
+    limiter = _rate_limiter(request)
+    if limiter is None:
+        return
+    try:
+        limiter.check_create(_client_key(request))
+    except ReplayRateLimitExceeded as error:
+        _metrics(request).replay_rate_limit_rejections_total.inc(limit="creates_per_hour")
+        raise replay_rate_limited(error.retry_after_seconds) from error
+
+
+async def enforce_upload_concurrency_limit(request: Request) -> AsyncIterator[None]:
+    """Enforce the 2-concurrent-local-uploads limit for the duration of the PUT body."""
+    settings = _settings(request)
+    if not settings.replay_gateway_rate_limits_enforced:
+        yield
+        return
+    limiter = _rate_limiter(request)
+    if limiter is None:
+        yield
+        return
+    client_key = _client_key(request)
+    if not limiter.acquire_upload_slot(client_key):
+        _metrics(request).replay_rate_limit_rejections_total.inc(limit="concurrent_uploads")
+        raise replay_rate_limited(None)
+    try:
+        yield
+    finally:
+        limiter.release_upload_slot(client_key)
+
+
+router = APIRouter(
+    prefix="/api/v1/replays",
+    tags=["replays"],
+    dependencies=[
+        Depends(bind_safe_request_context),
+        Depends(enforce_gateway_rate_limit),
+    ],
+)
 
 
 def require_replay_token(
@@ -95,7 +173,12 @@ def _parse_byte_range(range_header: str | None, size: int) -> tuple[int, int] | 
     return start, end
 
 
-@router.post("", response_model=ReplayCreateResponse, status_code=201)
+@router.post(
+    "",
+    response_model=ReplayCreateResponse,
+    status_code=201,
+    dependencies=[Depends(enforce_create_rate_limit)],
+)
 async def create_replay(
     request: Request,
     body: ReplayCreateRequest,
@@ -105,7 +188,12 @@ async def create_replay(
     return ReplayCreateResponse(**data.model_dump(), request_id=request.state.request_id)
 
 
-@router.put("/{replay_id}/content", status_code=204, response_class=Response)
+@router.put(
+    "/{replay_id}/content",
+    status_code=204,
+    response_class=Response,
+    dependencies=[Depends(enforce_upload_concurrency_limit)],
+)
 async def upload_replay_content(
     request: Request,
     replay_id: Annotated[UUID, Path()],
@@ -119,6 +207,13 @@ async def upload_replay_content(
     row = await services.replay_service.authorize(replay_id, token)
     if ReplayStatus(row.status) != ReplayStatus.CREATED or not row.source_object_key:
         raise replay_not_found()
+    if row.upload_expires_at <= datetime.now(UTC):
+        raise ApiError(
+            status_code=410,
+            code="REPLAY_UPLOAD_EXPIRED",
+            message="The replay upload window has expired.",
+            retryable=False,
+        )
 
     max_bytes = min(settings.replay_max_bytes, row.declared_size_bytes)
     content_length = request.headers.get("content-length")
@@ -145,11 +240,19 @@ async def upload_replay_content(
     except ReplayObjectTooLarge as error:
         raise replay_too_large() from error
 
-    await services.replay_service.mark_local_uploaded(
-        replay_id,
-        token,
-        actual_size_bytes=stored.size_bytes,
-    )
+    try:
+        await services.replay_service.mark_local_uploaded(
+            replay_id,
+            token,
+            actual_size_bytes=stored.size_bytes,
+        )
+    except Exception:
+        # The object was already written to its final key by write_stream
+        # above; if the DB transition fails afterward, it must not linger as
+        # an orphan, so clean it up before propagating the original error.
+        with contextlib.suppress(Exception):
+            await storage.delete(row.source_object_key)
+        raise
     return Response(status_code=204)
 
 

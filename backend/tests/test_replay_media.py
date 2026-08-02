@@ -243,6 +243,28 @@ def test_progress_maps_out_time_ms_to_stage_15_80() -> None:
     assert parse_progress_out_time_ms("bitrate=1.2kbits/s\n") is None
 
 
+def test_parse_progress_supports_out_time_us() -> None:
+    assert parse_progress_out_time_ms("out_time_us=2500000\n") == 2500
+    assert parse_progress_out_time_ms("out_time_us=0\n") == 0
+    assert parse_progress_out_time_ms("out_time_us=not-a-number\n") is None
+
+
+def test_parse_progress_supports_out_time_timestamp_string() -> None:
+    assert parse_progress_out_time_ms("out_time=00:00:02.500000\n") == 2500
+    assert parse_progress_out_time_ms("out_time=01:02:03.250000") == (
+        (1 * 3600 + 2 * 60 + 3) * 1000 + 250
+    )
+    assert parse_progress_out_time_ms("out_time=00:00:00.000000\n") == 0
+    assert parse_progress_out_time_ms("out_time=N/A\n") is None
+    assert parse_progress_out_time_ms("out_time=garbage\n") is None
+
+
+def test_parse_progress_ignores_unrelated_lines() -> None:
+    assert parse_progress_out_time_ms("progress=continue\n") is None
+    assert parse_progress_out_time_ms("frame=120\n") is None
+    assert parse_progress_out_time_ms("") is None
+
+
 @dataclass
 class FakeProcessResult:
     returncode: int = 0
@@ -357,11 +379,20 @@ async def test_normalize_reports_progress_from_out_time_ms(tmp_path: Path) -> No
         ],
         on_stdout_chunks=[b"out_time_ms=0\n", b"out_time_ms=5000\n", b"out_time_ms=10000\n"],
     )
+    ticking_clock = {"value": 0.0}
+
+    def _clock() -> float:
+        # Advance well past the 1s rate-limit window between callbacks so each
+        # distinct progress value in this test is observable.
+        ticking_clock["value"] += 2.0
+        return ticking_clock["value"]
+
     media = ReplayMediaRunner(
         ffmpeg_path="ffmpeg",
         ffprobe_path="ffprobe",
         process_runner=runner,
         timeout_seconds=30,
+        progress_clock=_clock,
     )
     seen: list[int] = []
 
@@ -374,6 +405,102 @@ async def test_normalize_reports_progress_from_out_time_ms(tmp_path: Path) -> No
     assert seen[0] == 15
     assert seen[-1] == 80
     assert any(15 < value < 80 for value in seen)
+
+
+@pytest.mark.asyncio
+async def test_normalize_rate_limits_progress_callbacks_to_one_per_second(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.mp4"
+    output = tmp_path / "normalized.mp4"
+    source.write_bytes(b"fake")
+    probe = _probe(duration_seconds=10.0, audio_streams=(_audio(),))
+    normalized_probe = _ffprobe_json(duration="10.000000", width=640, height=360)
+
+    # A burst of distinct progress values that all arrive at the same instant
+    # (per the fake clock below) should still collapse to a single callback.
+    burst = [f"out_time_ms={i * 100}\n".encode() for i in range(1, 50)]
+    runner = FakeProcessRunner(
+        results=[
+            FakeProcessResult(returncode=0, stdout=b""),
+            FakeProcessResult(returncode=0, stdout=normalized_probe),
+        ],
+        on_stdout_chunks=burst,
+    )
+
+    fake_now = {"value": 1_000.0}
+
+    def _clock() -> float:
+        return fake_now["value"]
+
+    media = ReplayMediaRunner(
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        process_runner=runner,
+        timeout_seconds=30,
+        progress_clock=_clock,
+    )
+
+    seen: list[int] = []
+
+    async def on_progress(value: int) -> None:
+        seen.append(value)
+
+    await media.normalize(source, output, probe, progress=on_progress)
+    # Only the first value in the burst (no prior emission to rate-limit against)
+    # plus the guaranteed final emission should have been delivered.
+    assert len(seen) == 2
+    assert seen[0] == 15
+    assert seen[-1] == 80
+
+
+@pytest.mark.asyncio
+async def test_normalize_serializes_progress_callbacks_without_overlap(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.mp4"
+    output = tmp_path / "normalized.mp4"
+    source.write_bytes(b"fake")
+    probe = _probe(duration_seconds=10.0, audio_streams=(_audio(),))
+    normalized_probe = _ffprobe_json(duration="10.000000", width=640, height=360)
+
+    lines = [f"out_time_ms={i * 1000}\n".encode() for i in range(10)]
+    runner = FakeProcessRunner(
+        results=[
+            FakeProcessResult(returncode=0, stdout=b""),
+            FakeProcessResult(returncode=0, stdout=normalized_probe),
+        ],
+        on_stdout_chunks=lines,
+    )
+
+    ticking_clock = {"value": 0.0}
+
+    def _clock() -> float:
+        # Always advances well past the 1s rate-limit window so every distinct
+        # value is eligible to be delivered, maximizing overlap opportunity.
+        ticking_clock["value"] += 2.0
+        return ticking_clock["value"]
+
+    media = ReplayMediaRunner(
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        process_runner=runner,
+        timeout_seconds=30,
+        progress_clock=_clock,
+    )
+
+    active = 0
+    max_active = 0
+
+    async def on_progress(value: int) -> None:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0)
+        active -= 1
+
+    await media.normalize(source, output, probe, progress=on_progress)
+    assert max_active == 1
 
 
 @pytest.mark.asyncio
@@ -468,3 +595,61 @@ async def test_subprocess_runner_uses_create_subprocess_exec_and_kills_on_timeou
     assert fake_process.killed is True
     assert exc_info.value.code == "REPLAY_PROCESSING_FAILED"
     assert exc_info.value.diagnostics is not None
+
+
+@pytest.mark.asyncio
+async def test_streaming_run_bounds_stderr_tail_and_drops_full_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.replays import media as media_mod
+
+    class FakeStream:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self._chunks = list(chunks)
+
+        async def read(self, _n: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+    class FakeStreamingProcess:
+        def __init__(self, stdout_chunks: list[bytes], stderr_chunks: list[bytes]) -> None:
+            self.stdout = FakeStream(stdout_chunks)
+            self.stderr = FakeStream(stderr_chunks)
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            pass
+
+        def kill(self) -> None:
+            pass
+
+    # ~120 KiB total, well over the 64 KiB tail retention target.
+    stderr_chunks = [f"line-{i:04d}-".encode() + b"z" * 4090 for i in range(30)]
+    stdout_chunks = [b"out_time_ms=1000\n", b"out_time_ms=2000\n"]
+    fake_process = FakeStreamingProcess(stdout_chunks, stderr_chunks)
+
+    async def fake_create_subprocess_exec(*args: Any, **kwargs: Any) -> FakeStreamingProcess:
+        del args, kwargs
+        return fake_process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    runner = media_mod.AsyncSubprocessRunner()
+    seen_lines: list[str] = []
+    result = await runner.run(
+        ["ffmpeg", "-progress", "pipe:1"],
+        timeout_seconds=5,
+        on_stdout_line=seen_lines.append,
+    )
+
+    assert seen_lines == ["out_time_ms=1000", "out_time_ms=2000"]
+    # Full stdout must not be retained once lines have been parsed out of it.
+    assert result.stdout == b""
+    # stderr must be a bounded tail buffer, not the full unbounded history.
+    assert len(result.stderr) <= 64 * 1024
+    assert result.stderr.endswith(stderr_chunks[-1])
+    assert stderr_chunks[0] not in result.stderr

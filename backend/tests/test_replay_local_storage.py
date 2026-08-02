@@ -164,3 +164,56 @@ async def test_stat_download_upload_and_create_upload_target(tmp_path: Path) -> 
 def _write_temp(path: Path, content: bytes) -> Path:
     path.write_bytes(content)
     return path
+
+
+@pytest.mark.asyncio
+async def test_promote_moves_temp_key_to_final_key(tmp_path: Path) -> None:
+    storage = LocalReplayStorage(tmp_path)
+    await storage.write_stream("tmp/source/abc/input", aiter([b"promoted-bytes"]), max_bytes=100)
+
+    result = await storage.promote("tmp/source/abc/input", "source/abc/input")
+
+    assert result.key == "source/abc/input"
+    assert result.size_bytes == len(b"promoted-bytes")
+    assert result.sha256 is not None
+    assert not storage.resolve_key("tmp/source/abc/input").exists()  # noqa: ASYNC240
+    assert storage.resolve_key("source/abc/input").read_bytes() == b"promoted-bytes"  # noqa: ASYNC240
+
+
+@pytest.mark.asyncio
+async def test_promote_missing_temp_raises_not_found(tmp_path: Path) -> None:
+    storage = LocalReplayStorage(tmp_path)
+    with pytest.raises(ReplayObjectNotFound):
+        await storage.promote("tmp/source/abc/input", "source/abc/input")
+    assert not storage.resolve_key("source/abc/input").exists()  # noqa: ASYNC240
+
+
+@pytest.mark.asyncio
+async def test_delete_prefix_removes_directory_tree(tmp_path: Path) -> None:
+    storage = LocalReplayStorage(tmp_path)
+    await storage.write_stream("frames/abc/anchor-0", aiter([b"frame-a"]), max_bytes=100)
+    await storage.write_stream("frames/abc/verify-1", aiter([b"frame-b"]), max_bytes=100)
+    await storage.write_stream("source/abc/input", aiter([b"source"]), max_bytes=100)
+    await storage.write_stream("source/other/input", aiter([b"other"]), max_bytes=100)
+
+    await storage.delete_prefix("frames/abc")
+
+    assert not (tmp_path / "frames" / "abc").exists()  # noqa: ASYNC240
+    assert (tmp_path / "source" / "abc" / "input").is_file()  # noqa: ASYNC240
+    assert (tmp_path / "source" / "other" / "input").is_file()  # noqa: ASYNC240
+
+
+@pytest.mark.asyncio
+async def test_delete_prefix_missing_is_a_no_op(tmp_path: Path) -> None:
+    storage = LocalReplayStorage(tmp_path)
+    await storage.delete_prefix("source/does-not-exist")
+
+
+@pytest.mark.asyncio
+async def test_delete_prefix_rejects_keys_outside_storage_root(tmp_path: Path) -> None:
+    storage = LocalReplayStorage(tmp_path)
+    outside = tmp_path.parent / "outside-secret"
+    outside.write_bytes(b"secret")  # noqa: ASYNC240
+    with pytest.raises(InvalidReplayObjectKey):
+        await storage.delete_prefix("../outside-secret")
+    assert outside.read_bytes() == b"secret"  # noqa: ASYNC240

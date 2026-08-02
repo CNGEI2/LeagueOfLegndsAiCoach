@@ -13,6 +13,7 @@ from uuid import UUID
 
 from app.core.config import Settings
 from app.core.database import Database
+from app.core.metrics import MetricsRegistry
 from app.models.replay import ReplayJobRow
 from app.repositories.replays import (
     ReplayJobRepository,
@@ -44,6 +45,7 @@ async def run_worker(
     retention_interval_seconds: float = 60.0,
     now_factory: Callable[[], datetime] | None = None,
     worker_id: str | None = None,
+    metrics: MetricsRegistry | None = None,
 ) -> None:
     if not settings.replay_enabled:
         raise RuntimeError("replay worker requires REPLAY_ENABLED=true")
@@ -68,6 +70,7 @@ async def run_worker(
             storage=storage_adapter,
             media=media,
             clock=clock,
+            metrics=metrics,
         )
 
     now = clock()
