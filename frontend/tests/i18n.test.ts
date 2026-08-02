@@ -54,4 +54,22 @@ describe("message catalogs", () => {
     expect(en.verificationFrame.toLowerCase()).not.toMatch(/mistake|fight/);
     expect(zh.verificationFrame).not.toMatch(/失误|团战/);
   });
+
+  it("includes platform auto-detection bilingual copy", () => {
+    const en = getMessages("en-US");
+    const zh = getMessages("zh-CN");
+
+    expect(en.riotId).toBe("Riot ID");
+    expect(zh.riotId).toBe("Riot ID");
+    expect(en.riotIdExample).toContain("CNGEI#1115");
+    expect(zh.riotIdExample).toContain("CNGEI#1115");
+    expect(en.tagIsNotServer.toLowerCase()).toMatch(/not the game server/);
+    expect(zh.tagIsNotServer).toMatch(/不是服务器/);
+    expect(en.detectAccount).toBe("Find account");
+    expect(zh.detectAccount).toBe("识别账号");
+    expect(en.chooseServer).toBe("Choose your server");
+    expect(zh.chooseServer).toBe("选择服务器");
+    expect(en.detectionUnavailable.toLowerCase()).toMatch(/temporarily unavailable/);
+    expect(zh.confirmationExpired).toMatch(/过期/);
+  });
 });
