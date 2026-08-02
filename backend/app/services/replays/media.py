@@ -221,6 +221,8 @@ def build_normalize_command(
         vf,
         "-fps_mode",
         "cfr",
+        "-r",
+        "30",
         "-movflags",
         "+faststart",
         "-c:a",

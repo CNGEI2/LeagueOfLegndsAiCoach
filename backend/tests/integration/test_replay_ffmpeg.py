@@ -22,7 +22,7 @@ async def _generate_test_video(ffmpeg: str, output: Path) -> None:
         "-f",
         "lavfi",
         "-i",
-        "testsrc=duration=12:size=640x360:rate=30",
+        "testsrc=duration=12:size=640x360:rate=25",
         "-f",
         "lavfi",
         "-i",
@@ -70,6 +70,7 @@ async def test_real_ffmpeg_probe_normalize_and_extract(tmp_path: Path) -> None:
     assert len(probe.video_streams) == 1
     assert probe.video_streams[0].width == 640
     assert probe.video_streams[0].height == 360
+    assert probe.video_streams[0].avg_frame_rate == 25.0
     assert len(probe.audio_streams) >= 1
 
     validated = validate_probe(probe, limits)
@@ -100,7 +101,7 @@ async def test_real_ffmpeg_probe_normalize_and_extract(tmp_path: Path) -> None:
     assert abs(normalized_probe.duration_seconds - probe.duration_seconds) <= 1.0
     assert normalized_probe.video_streams[0].width <= 1280
     assert normalized_probe.video_streams[0].height <= 720
-    assert abs(normalized_probe.video_streams[0].avg_frame_rate - 30.0) < 0.1
+    assert normalized_probe.video_streams[0].avg_frame_rate == 30.0
 
     for second in (0, 5, 11):
         frame_path = tmp_path / f"frame_{second}.jpg"

@@ -98,6 +98,8 @@ def test_normalize_command_includes_required_flags() -> None:
     assert "1280" in vf and "720" in vf
     assert "-fps_mode" in command
     assert "cfr" in command
+    fps_mode_index = command.index("-fps_mode")
+    assert command[fps_mode_index : fps_mode_index + 4] == ["-fps_mode", "cfr", "-r", "30"]
     assert "-movflags" in command
     assert "-c:a" in command
     assert "aac" in command
