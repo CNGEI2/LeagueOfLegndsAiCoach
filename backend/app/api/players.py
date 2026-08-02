@@ -1,14 +1,28 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request
 
 from app.core.dependencies import AppServices, get_services
-from app.core.errors import ApiError
+from app.core.errors import invalid_riot_id
 from app.core.logging import bind_safe_request_context
 from app.core.routing import Platform
 from app.schemas.domain import Locale
 from app.schemas.matches import RecentMatchesResponse
+from app.schemas.platform_detection import (
+    ConfirmationRequiredResponse,
+    ConfirmPlatformRequest,
+    DetectPlayerRequest,
+    DetectPlayerResponse,
+    PlatformCandidate,
+    ResolvedDetectionResponse,
+)
 from app.schemas.players import ResolvePlayerResponse
+from app.services.platform_detection import (
+    ConfirmationRequiredDetection,
+    DetectionResult,
+    ResolvedDetection,
+)
 
 router = APIRouter(
     prefix="/api/v1/players",
@@ -21,13 +35,57 @@ def validate_riot_id(game_name: str, tag_line: str) -> tuple[str, str]:
     normalized_game_name = game_name.strip()
     normalized_tag_line = tag_line.strip()
     if not 1 <= len(normalized_game_name) <= 32 or not 1 <= len(normalized_tag_line) <= 16:
-        raise ApiError(
-            status_code=422,
-            code="INVALID_RIOT_ID",
-            message="Riot ID is invalid.",
-            retryable=False,
-        )
+        raise invalid_riot_id()
     return normalized_game_name, normalized_tag_line
+
+
+def _detection_response(result: DetectionResult, *, request_id: str) -> DetectPlayerResponse:
+    if isinstance(result, ResolvedDetection):
+        return ResolvedDetectionResponse(
+            status="resolved",
+            player=result.player,
+            request_id=request_id,
+        )
+    if isinstance(result, ConfirmationRequiredDetection):
+        return ConfirmationRequiredResponse(
+            status="confirmation_required",
+            detection_id=result.detection_id,
+            expires_at=result.expires_at,
+            candidates=tuple(
+                PlatformCandidate(platform=candidate.platform, display_name=candidate.display_name)
+                for candidate in result.candidates
+            ),
+            request_id=request_id,
+        )
+    raise TypeError(f"unsupported detection result: {type(result)!r}")
+
+
+@router.post("/detect", response_model=DetectPlayerResponse)
+async def detect_player(
+    request: Request,
+    body: DetectPlayerRequest,
+    services: Annotated[AppServices, Depends(get_services)],
+) -> DetectPlayerResponse:
+    result = await services.platform_detection_service.detect(
+        riot_id=body.riot_id,
+        locale=body.locale,
+    )
+    return _detection_response(result, request_id=request.state.request_id)
+
+
+@router.post("/detect/{detection_id}/confirm", response_model=DetectPlayerResponse)
+async def confirm_player_platform(
+    request: Request,
+    detection_id: UUID,
+    body: ConfirmPlatformRequest,
+    services: Annotated[AppServices, Depends(get_services)],
+) -> DetectPlayerResponse:
+    result = await services.platform_detection_service.confirm(
+        detection_id=detection_id,
+        platform=body.platform,
+        locale=body.locale,
+    )
+    return _detection_response(result, request_id=request.state.request_id)
 
 
 @router.get("/resolve", response_model=ResolvePlayerResponse)

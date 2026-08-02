@@ -4,7 +4,16 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
-from app.core.errors import api_error_handler, replay_rate_limited
+from app.core.errors import (
+    api_error_handler,
+    invalid_platform_selection,
+    invalid_riot_id,
+    not_found,
+    platform_confirmation_expired,
+    player_not_found,
+    replay_rate_limited,
+    riot_platform_detection_unavailable,
+)
 from app.main import create_app
 
 
@@ -80,6 +89,23 @@ def test_unhandled_exceptions_keep_request_id_and_cors_headers(
     }
     assert "X-Request-ID" in exposed
     assert "secret" not in response.text
+
+
+def test_platform_detection_error_factories_use_stable_contracts() -> None:
+    assert not_found().code == "NOT_FOUND"
+    assert not_found().status_code == 404
+    assert invalid_riot_id().code == "INVALID_RIOT_ID"
+    assert invalid_riot_id().status_code == 422
+    assert player_not_found().code == "PLAYER_NOT_FOUND"
+    assert player_not_found().retryable is False
+    unavailable = riot_platform_detection_unavailable()
+    assert unavailable.code == "RIOT_PLATFORM_DETECTION_UNAVAILABLE"
+    assert unavailable.status_code == 503
+    assert unavailable.retryable is True
+    assert platform_confirmation_expired().code == "PLATFORM_CONFIRMATION_EXPIRED"
+    assert platform_confirmation_expired().status_code == 409
+    assert invalid_platform_selection().code == "INVALID_PLATFORM_SELECTION"
+    assert invalid_platform_selection().status_code == 422
 
 
 def test_replay_rate_limited_sets_retry_after_header_and_params() -> None:

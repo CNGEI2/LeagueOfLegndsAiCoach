@@ -284,6 +284,7 @@ def _metrics_app(**settings_overrides: object) -> tuple[TestClient, MetricsRegis
         player_service=object(),  # type: ignore[arg-type]
         match_service=object(),  # type: ignore[arg-type]
         replay_service=object(),  # type: ignore[arg-type]
+        platform_detection_service=object(),  # type: ignore[arg-type]
         closers=(),
     )
     application = create_app(

@@ -138,6 +138,7 @@ def privacy_client(tmp_path: Path) -> Generator[TestClient, None, None]:
         player_service=object(),  # type: ignore[arg-type]
         match_service=object(),  # type: ignore[arg-type]
         replay_service=service,  # type: ignore[arg-type]
+        platform_detection_service=object(),  # type: ignore[arg-type]
         closers=(),
     )
     with TestClient(

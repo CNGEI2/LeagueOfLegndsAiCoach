@@ -72,12 +72,25 @@ class FakeReplayService:
         raise AssertionError(f"replay service should not be called unexpectedly: {args} {kwargs}")
 
 
+class FakePlatformDetectionService:
+    async def detect(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(
+            f"platform detection service should not be called unexpectedly: {args} {kwargs}"
+        )
+
+    async def confirm(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(
+            f"platform detection service should not be called unexpectedly: {args} {kwargs}"
+        )
+
+
 @pytest.fixture
 def fake_services() -> AppServices:
     return AppServices(
         player_service=FakePlayerService(),
         match_service=FakeMatchService(),
         replay_service=FakeReplayService(),
+        platform_detection_service=FakePlatformDetectionService(),
         closers=(),
     )
 

@@ -1,11 +1,21 @@
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
-from app.core.errors import ApiError
+from app.core.errors import (
+    ApiError,
+    invalid_platform_selection,
+    not_found,
+    platform_confirmation_expired,
+    player_not_found,
+    riot_platform_detection_unavailable,
+)
+from app.core.metrics import MetricsRegistry
+from app.core.metrics import metrics as default_metrics
 from app.core.routing import Platform, Region, display_name_for, ordered_platforms
 from app.repositories.platform_detections import (
     DetectionStatus,
@@ -24,6 +34,7 @@ _REGION_FALLBACK_ORDER = (
     Region.SEA,
 )
 _PROBE_AVAILABILITY_CODES = frozenset({"RIOT_RATE_LIMITED", "RIOT_UNAVAILABLE"})
+_DETECTION_OUTCOMES = frozenset({"resolved", "confirmation_required", "not_found", "unavailable"})
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,16 @@ class DetectionPlayerService(Protocol):
     async def get_by_puuid(self, *, platform: Platform, puuid: str) -> PlayerView: ...
 
 
+class DisabledPlatformDetectionService:
+    async def detect(self, *, riot_id: str, locale: Locale) -> DetectionResult:
+        raise not_found()
+
+    async def confirm(
+        self, *, detection_id: UUID, platform: Platform, locale: Locale
+    ) -> DetectionResult:
+        raise not_found()
+
+
 class PlatformDetectionService:
     def __init__(
         self,
@@ -82,6 +103,7 @@ class PlatformDetectionService:
         primary_region: Region,
         max_concurrency: int,
         clock: Callable[[], datetime] | None = None,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         self._repository = repository
         self._gateway = gateway
@@ -92,29 +114,50 @@ class PlatformDetectionService:
         self._primary_region = primary_region
         self._probe_semaphore = asyncio.Semaphore(max_concurrency)
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._metrics = metrics or default_metrics
         self._inflight: dict[tuple[str, str], asyncio.Task[PlatformDetectionRecord]] = {}
         self._inflight_lock = asyncio.Lock()
 
     async def detect(self, *, riot_id: str, locale: Locale) -> DetectionResult:
-        parsed = parse_riot_id(riot_id)
-        now = self._clock()
-        record = await self._repository.get_fresh(
-            game_name_key=parsed.game_name_key,
-            tag_line_key=parsed.tag_line_key,
-            now=now,
-        )
-        if record is None:
-            record = await self._detect_single_flight(parsed)
-        elif (
-            record.status is DetectionStatus.AMBIGUOUS
-            and record.confirmation_expires_at is not None
-            and record.confirmation_expires_at <= now
-        ):
-            confirmation_expires_at = now + timedelta(seconds=self._confirmation_ttl_seconds)
-            record = await self._repository.upsert(
-                replace(record, confirmation_expires_at=confirmation_expires_at)
+        started = time.perf_counter()
+        outcome: str | None = None
+        try:
+            parsed = parse_riot_id(riot_id)
+            now = self._clock()
+            record = await self._repository.get_fresh(
+                game_name_key=parsed.game_name_key,
+                tag_line_key=parsed.tag_line_key,
+                now=now,
             )
-        return await self._result_for(record, locale)
+            if record is None:
+                self._metrics.riot_platform_detection_cache_total.inc(status="miss")
+                record = await self._detect_single_flight(parsed)
+            else:
+                self._metrics.riot_platform_detection_cache_total.inc(status="hit")
+                if (
+                    record.status is DetectionStatus.AMBIGUOUS
+                    and record.confirmation_expires_at is not None
+                    and record.confirmation_expires_at <= now
+                ):
+                    confirmation_expires_at = now + timedelta(
+                        seconds=self._confirmation_ttl_seconds
+                    )
+                    record = await self._repository.upsert(
+                        replace(record, confirmation_expires_at=confirmation_expires_at)
+                    )
+            result = await self._result_for(record, locale)
+            outcome = result.status
+            return result
+        except ApiError as exc:
+            outcome = _detection_outcome_for_error(exc)
+            raise
+        finally:
+            if outcome in _DETECTION_OUTCOMES:
+                elapsed = time.perf_counter() - started
+                self._metrics.riot_platform_detection_requests_total.inc(outcome=outcome)
+                self._metrics.riot_platform_detection_duration_seconds.observe(
+                    elapsed, outcome=outcome
+                )
 
     async def confirm(
         self, *, detection_id: UUID, platform: Platform, locale: Locale
@@ -124,9 +167,10 @@ class PlatformDetectionService:
             now=self._clock(),
         )
         if record is None:
-            raise _confirmation_expired()
+            self._metrics.riot_platform_confirmation_total.inc(outcome="expired")
+            raise platform_confirmation_expired()
         if platform not in record.candidate_platforms:
-            raise _invalid_platform_selection()
+            raise invalid_platform_selection()
         if record.puuid is None:
             raise _invalid_response()
         try:
@@ -139,12 +183,15 @@ class PlatformDetectionService:
             await self._repository.delete(detection_id=detection_id)
             if record.canonical_game_name is None or record.canonical_tag_line is None:
                 raise _invalid_response() from None
+            self._metrics.riot_platform_confirmation_total.inc(outcome="not_found")
             return await self.detect(
-                riot_id=f"{record.canonical_game_name}#{record.canonical_tag_line}", locale=locale
+                riot_id=f"{record.canonical_game_name}#{record.canonical_tag_line}",
+                locale=locale,
             )
         if summoner.puuid != record.puuid:
             raise _invalid_response()
         player = await self._player_service.get_by_puuid(platform=platform, puuid=record.puuid)
+        self._metrics.riot_platform_confirmation_total.inc(outcome="success")
         return ResolvedDetection(status="resolved", player=player)
 
     async def _detect_single_flight(self, parsed: ParsedRiotId) -> PlatformDetectionRecord:
@@ -189,7 +236,7 @@ class PlatformDetectionService:
             candidates = await self._probe_platforms(account.puuid)
         except ApiError as exc:
             if exc.code in _PROBE_AVAILABILITY_CODES:
-                raise _platform_unavailable(exc) from None
+                raise riot_platform_detection_unavailable(exc) from None
             raise
         now = self._clock()
         if not candidates:
@@ -268,10 +315,12 @@ class PlatformDetectionService:
                 summoner = await self._gateway.get_summoner_by_puuid(platform=platform, puuid=puuid)
             except ApiError as exc:
                 if exc.code == "PLAYER_NOT_FOUND":
+                    self._metrics.riot_platform_detection_probes_total.inc(result="not_found")
                     return None
                 raise
         if summoner.puuid != puuid:
             raise _invalid_response()
+        self._metrics.riot_platform_detection_probes_total.inc(result="found")
         return platform
 
     def _region_order(self) -> tuple[Region, ...]:
@@ -281,7 +330,7 @@ class PlatformDetectionService:
 
     async def _result_for(self, record: PlatformDetectionRecord, locale: Locale) -> DetectionResult:
         if record.status is DetectionStatus.NOT_FOUND:
-            raise _player_not_found()
+            raise player_not_found()
         if record.status is DetectionStatus.RESOLVED:
             if record.puuid is None or len(record.candidate_platforms) != 1:
                 raise _invalid_response()
@@ -309,42 +358,12 @@ class PlatformDetectionService:
         raise _invalid_response()
 
 
-def _player_not_found() -> ApiError:
-    return ApiError(
-        status_code=404,
-        code="PLAYER_NOT_FOUND",
-        message="The player was not found.",
-        retryable=False,
-    )
-
-
-def _platform_unavailable(source: ApiError) -> ApiError:
-    return ApiError(
-        status_code=503,
-        code="RIOT_PLATFORM_DETECTION_UNAVAILABLE",
-        message="Riot platform detection is temporarily unavailable.",
-        params=source.params,
-        retryable=True,
-        headers=source.headers,
-    )
-
-
-def _confirmation_expired() -> ApiError:
-    return ApiError(
-        status_code=409,
-        code="PLATFORM_CONFIRMATION_EXPIRED",
-        message="Platform confirmation has expired.",
-        retryable=False,
-    )
-
-
-def _invalid_platform_selection() -> ApiError:
-    return ApiError(
-        status_code=422,
-        code="INVALID_PLATFORM_SELECTION",
-        message="The selected platform is not a candidate.",
-        retryable=False,
-    )
+def _detection_outcome_for_error(exc: ApiError) -> str | None:
+    if exc.code == "PLAYER_NOT_FOUND":
+        return "not_found"
+    if exc.code == "RIOT_PLATFORM_DETECTION_UNAVAILABLE":
+        return "unavailable"
+    return None
 
 
 def _invalid_response() -> ApiError:

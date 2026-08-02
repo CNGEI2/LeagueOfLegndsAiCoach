@@ -283,6 +283,7 @@ def replay_client(
         player_service=object(),  # type: ignore[arg-type]
         match_service=object(),  # type: ignore[arg-type]
         replay_service=replay_service,  # type: ignore[arg-type]
+        platform_detection_service=object(),  # type: ignore[arg-type]
         closers=(),
     )
     with TestClient(

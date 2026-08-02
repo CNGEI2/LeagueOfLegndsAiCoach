@@ -42,6 +42,17 @@ _DEFAULT_LAG_BUCKETS: tuple[float, ...] = (
     21600.0,
     86400.0,
 )
+_DETECTION_DURATION_BUCKETS: tuple[float, ...] = (
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    30.0,
+)
 
 
 def _label_key(labels: dict[str, str]) -> str:
@@ -147,7 +158,7 @@ class Histogram:
 
 
 class MetricsRegistry:
-    """Process-local registry for the Replay R1 production-hardening metrics."""
+    """Process-local registry for replay and Riot platform-detection metrics."""
 
     def __init__(self) -> None:
         self.replay_processing_duration_seconds = Histogram(
@@ -171,6 +182,27 @@ class MetricsRegistry:
             "replay_rate_limit_rejections_total",
             "Replay gateway requests rejected for exceeding a rate limit, labeled by limit.",
         )
+        self.riot_platform_detection_requests_total = Counter(
+            "riot_platform_detection_requests_total",
+            "Platform detection requests, labeled by closed-set outcome.",
+        )
+        self.riot_platform_detection_duration_seconds = Histogram(
+            "riot_platform_detection_duration_seconds",
+            "Platform detection latency in seconds, labeled by closed-set outcome.",
+            buckets=_DETECTION_DURATION_BUCKETS,
+        )
+        self.riot_platform_detection_cache_total = Counter(
+            "riot_platform_detection_cache_total",
+            "Platform detection cache lookups, labeled by closed-set status.",
+        )
+        self.riot_platform_detection_probes_total = Counter(
+            "riot_platform_detection_probes_total",
+            "Summoner platform probes, labeled by closed-set result.",
+        )
+        self.riot_platform_confirmation_total = Counter(
+            "riot_platform_confirmation_total",
+            "Platform confirmation attempts, labeled by closed-set outcome.",
+        )
 
     def render_prometheus_text(self) -> str:
         lines: list[str] = []
@@ -178,6 +210,10 @@ class MetricsRegistry:
             self.replay_processing_failures_total,
             self.replay_job_retries_total,
             self.replay_rate_limit_rejections_total,
+            self.riot_platform_detection_requests_total,
+            self.riot_platform_detection_cache_total,
+            self.riot_platform_detection_probes_total,
+            self.riot_platform_confirmation_total,
         ):
             lines.append(f"# HELP {counter.name} {counter.description}")
             lines.append(f"# TYPE {counter.name} counter")
@@ -186,6 +222,7 @@ class MetricsRegistry:
         for histogram in (
             self.replay_processing_duration_seconds,
             self.replay_cleanup_lag_seconds,
+            self.riot_platform_detection_duration_seconds,
         ):
             lines.append(f"# HELP {histogram.name} {histogram.description}")
             lines.append(f"# TYPE {histogram.name} histogram")

@@ -231,6 +231,7 @@ def _build_client(
         player_service=object(),  # type: ignore[arg-type]
         match_service=object(),  # type: ignore[arg-type]
         replay_service=ControllableReplayService(),  # type: ignore[arg-type]
+        platform_detection_service=object(),  # type: ignore[arg-type]
         closers=(),
     )
     registry = MetricsRegistry()

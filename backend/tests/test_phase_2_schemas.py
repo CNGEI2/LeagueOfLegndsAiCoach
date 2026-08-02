@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -16,6 +17,13 @@ from app.schemas.matches import (
     MatchDetailResponse,
     RecentMatchesResponse,
     RecentMatchItem,
+)
+from app.schemas.platform_detection import (
+    ConfirmationRequiredResponse,
+    ConfirmPlatformRequest,
+    DetectPlayerRequest,
+    PlatformCandidate,
+    ResolvedDetectionResponse,
 )
 from app.schemas.players import ResolvePlayerResponse
 
@@ -268,3 +276,91 @@ def test_match_detail_response_serializes_exact_public_fields() -> None:
         "scope_notice_code": "DATA_ONLY_NO_COACHING",
         "request_id": "request-123",
     }
+
+
+def test_detect_player_request_rejects_extra_fields_and_invalid_locale() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        DetectPlayerRequest(riot_id="Player#TAG", locale=Locale.EN_US, extra="nope")
+    with pytest.raises(ValidationError):
+        DetectPlayerRequest.model_validate({"riot_id": "Player#TAG", "locale": "fr-FR"})
+
+
+def test_confirm_platform_request_rejects_unknown_platform() -> None:
+    with pytest.raises(ValidationError):
+        ConfirmPlatformRequest.model_validate({"platform": "XYZ1", "locale": "en-US"})
+
+
+def test_resolved_detection_response_serializes_exact_public_fields() -> None:
+    response = ResolvedDetectionResponse(
+        status="resolved",
+        player=_player_view(),
+        request_id="request-123",
+    )
+    assert response.model_dump(mode="json") == {
+        "status": "resolved",
+        "player": PLAYER_DUMP,
+        "request_id": "request-123",
+    }
+
+
+def test_confirmation_required_response_rejects_naive_expiry_and_empty_candidates() -> None:
+    detection_id = UUID("12345678-1234-5678-1234-567812345678")
+    with pytest.raises(ValidationError):
+        ConfirmationRequiredResponse(
+            status="confirmation_required",
+            detection_id=detection_id,
+            expires_at=datetime(2026, 8, 2, 12, 15),
+            candidates=(PlatformCandidate(platform=Platform.NA1, display_name="North America"),),
+            request_id="request-123",
+        )
+    with pytest.raises(ValidationError):
+        ConfirmationRequiredResponse(
+            status="confirmation_required",
+            detection_id=detection_id,
+            expires_at=datetime(2026, 8, 2, 12, 15, tzinfo=UTC),
+            candidates=(),
+            request_id="request-123",
+        )
+
+
+def test_confirmation_required_response_serializes_exact_public_fields() -> None:
+    detection_id = UUID("12345678-1234-5678-1234-567812345678")
+    response = ConfirmationRequiredResponse(
+        status="confirmation_required",
+        detection_id=detection_id,
+        expires_at=datetime(2026, 8, 2, 12, 15, tzinfo=UTC),
+        candidates=(
+            PlatformCandidate(platform=Platform.EUW1, display_name="Europe West"),
+            PlatformCandidate(platform=Platform.NA1, display_name="North America"),
+        ),
+        request_id="request-123",
+    )
+    assert response.model_dump(mode="json") == {
+        "status": "confirmation_required",
+        "detection_id": "12345678-1234-5678-1234-567812345678",
+        "expires_at": "2026-08-02T12:15:00Z",
+        "candidates": [
+            {"platform": "EUW1", "display_name": "Europe West"},
+            {"platform": "NA1", "display_name": "North America"},
+        ],
+        "request_id": "request-123",
+    }
+
+
+def test_detection_status_variants_reject_wrong_fields() -> None:
+    with pytest.raises(ValidationError):
+        ResolvedDetectionResponse.model_validate(
+            {
+                "status": "resolved",
+                "detection_id": "12345678-1234-5678-1234-567812345678",
+                "request_id": "request-123",
+            }
+        )
+    with pytest.raises(ValidationError):
+        ConfirmationRequiredResponse.model_validate(
+            {
+                "status": "confirmation_required",
+                "player": PLAYER_DUMP,
+                "request_id": "request-123",
+            }
+        )

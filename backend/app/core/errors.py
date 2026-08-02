@@ -29,6 +29,62 @@ class ApiError(Exception):
         self.headers = headers or {}
 
 
+def not_found() -> ApiError:
+    return ApiError(
+        status_code=404,
+        code="NOT_FOUND",
+        message="The requested resource was not found.",
+        retryable=False,
+    )
+
+
+def invalid_riot_id() -> ApiError:
+    return ApiError(
+        status_code=422,
+        code="INVALID_RIOT_ID",
+        message="Riot ID is invalid.",
+        retryable=False,
+    )
+
+
+def player_not_found() -> ApiError:
+    return ApiError(
+        status_code=404,
+        code="PLAYER_NOT_FOUND",
+        message="The player was not found.",
+        retryable=False,
+    )
+
+
+def riot_platform_detection_unavailable(source: ApiError | None = None) -> ApiError:
+    return ApiError(
+        status_code=503,
+        code="RIOT_PLATFORM_DETECTION_UNAVAILABLE",
+        message="Riot platform detection is temporarily unavailable.",
+        params=source.params if source is not None else {},
+        retryable=True,
+        headers=source.headers if source is not None else {},
+    )
+
+
+def platform_confirmation_expired() -> ApiError:
+    return ApiError(
+        status_code=409,
+        code="PLATFORM_CONFIRMATION_EXPIRED",
+        message="Platform confirmation has expired.",
+        retryable=False,
+    )
+
+
+def invalid_platform_selection() -> ApiError:
+    return ApiError(
+        status_code=422,
+        code="INVALID_PLATFORM_SELECTION",
+        message="The selected platform is not a candidate.",
+        retryable=False,
+    )
+
+
 def replay_not_found() -> ApiError:
     return ApiError(
         status_code=404,

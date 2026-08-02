@@ -1,13 +1,31 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from app.core.config import Settings
-from app.core.dependencies import AppServices
+from app.core.dependencies import AppServices, build_services
 from app.main import create_app
+from app.services.platform_detection import (
+    DisabledPlatformDetectionService,
+    PlatformDetectionService,
+)
 from app.services.replays.storage.local import LocalReplayStorage
 from app.services.replays.storage.s3 import S3ReplayStorage
-from tests.conftest import FakeDatabase, FakeMatchService, FakePlayerService, FakeReplayService
+from tests.conftest import (
+    FakeDatabase,
+    FakeMatchService,
+    FakePlatformDetectionService,
+    FakePlayerService,
+    FakeReplayService,
+)
+
+
+class _StubDatabase:
+    def __init__(self) -> None:
+        self.session_factory: Any = object()
 
 
 def _services() -> AppServices:
@@ -15,6 +33,7 @@ def _services() -> AppServices:
         player_service=FakePlayerService(),
         match_service=FakeMatchService(),
         replay_service=FakeReplayService(),
+        platform_detection_service=FakePlatformDetectionService(),
         closers=(),
     )
 
@@ -77,6 +96,40 @@ def test_create_app_leaves_storage_none_when_replay_disabled() -> None:
     application = create_app(settings=settings, database=FakeDatabase(), services=_services())
 
     assert application.state.replay_storage is None
+
+
+@pytest.mark.asyncio
+async def test_build_services_uses_disabled_platform_detection_when_flag_is_off() -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        riot_api_key="RGAPI-test",
+        riot_platform_detection_enabled=False,
+    )
+
+    services = build_services(settings=settings, database=_StubDatabase())  # type: ignore[arg-type]
+    try:
+        assert isinstance(services.platform_detection_service, DisabledPlatformDetectionService)
+    finally:
+        await services.close()
+
+
+@pytest.mark.asyncio
+async def test_build_services_wires_platform_detection_service_when_flag_is_on() -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        riot_api_key="RGAPI-test",
+        riot_platform_detection_enabled=True,
+    )
+
+    services = build_services(settings=settings, database=_StubDatabase())  # type: ignore[arg-type]
+    try:
+        assert isinstance(services.platform_detection_service, PlatformDetectionService)
+    finally:
+        await services.close()
 
 
 def test_create_app_prefers_explicitly_injected_storage_over_the_factory(tmp_path: Path) -> None:

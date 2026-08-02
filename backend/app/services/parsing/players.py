@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.core.errors import ApiError
+from app.core.errors import ApiError, invalid_riot_id
 from app.core.normalization import lookup_key
 from app.core.routing import Platform
 from app.schemas.domain import PlayerProfile
@@ -19,7 +19,7 @@ def parse_riot_id(value: str) -> ParsedRiotId:
     normalized = value.strip()
     game_name, separator, tag_line = normalized.rpartition("#")
     if not separator or not 1 <= len(game_name) <= 32 or not 1 <= len(tag_line) <= 16:
-        raise _invalid_riot_id()
+        raise invalid_riot_id()
     return ParsedRiotId(
         game_name=game_name,
         tag_line=tag_line,
@@ -49,14 +49,5 @@ def _invalid_response() -> ApiError:
         status_code=502,
         code="RIOT_INVALID_RESPONSE",
         message="Riot returned an invalid response.",
-        retryable=False,
-    )
-
-
-def _invalid_riot_id() -> ApiError:
-    return ApiError(
-        status_code=422,
-        code="INVALID_RIOT_ID",
-        message="Riot ID is invalid.",
         retryable=False,
     )
