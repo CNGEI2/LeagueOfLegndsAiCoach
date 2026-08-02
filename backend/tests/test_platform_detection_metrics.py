@@ -7,7 +7,7 @@ import pytest
 
 from app.core.errors import ApiError
 from app.core.metrics import MetricsRegistry
-from app.core.routing import Platform, Region
+from app.core.routing import Platform, Region, detection_probe_platforms
 from app.repositories.platform_detections import DetectionStatus, PlatformDetectionRecord
 from app.schemas.domain import Locale, PlayerView, StaticDataStatus
 from app.services.platform_detection import PlatformDetectionService
@@ -148,5 +148,7 @@ async def test_detection_service_records_probe_results_on_miss() -> None:
 
     assert registry.riot_platform_detection_cache_total.value(status="miss") == 1
     assert registry.riot_platform_detection_probes_total.value(result="found") == 1
-    assert registry.riot_platform_detection_probes_total.value(result="not_found") == 15
+    assert registry.riot_platform_detection_probes_total.value(result="not_found") == (
+        len(detection_probe_platforms()) - 1
+    )
     assert registry.riot_platform_detection_requests_total.value(outcome="resolved") == 1
