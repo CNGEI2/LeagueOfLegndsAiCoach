@@ -40,6 +40,10 @@ from app.services.replays.storage.base import (
 
 _FRAME_INTERVAL_MS = 30_000
 _MAX_FRAMES = 181
+# FFmpeg input seeks to the exact media duration often yield no packets
+# (especially for short lavfi/CFR fixtures). Keep terminal samples inside
+# the decodable window by this margin.
+_FRAME_SEEK_SAFE_MARGIN_MS = 100
 _NON_RETRYABLE_MEDIA_CODES = frozenset(
     {
         "REPLAY_MEDIA_UNSUPPORTED",
@@ -372,7 +376,15 @@ class ReplayProcessor:
         )
         await self._ensure_not_deleting(row)
 
-        frame_times = plan_frame_game_times(coverage.end_ms)
+        duration_ms = int(normalized_validated.duration_seconds * 1000)
+        extractable_end_ms = max(
+            0,
+            duration_ms - row.game_time_zero_ms - _FRAME_SEEK_SAFE_MARGIN_MS,
+        )
+        frame_times = plan_frame_game_times(
+            coverage.end_ms,
+            extractable_end_ms=extractable_end_ms,
+        )
         total = max(1, len(frame_times))
         for index, game_time_ms in enumerate(frame_times):
             await self._ensure_not_deleting(row)
@@ -594,14 +606,24 @@ class ReplayProcessor:
         self._metrics.replay_cleanup_lag_seconds.observe(lag_seconds, kind=kind)
 
 
-def plan_frame_game_times(coverage_end_ms: int, *, max_frames: int = _MAX_FRAMES) -> list[int]:
+def plan_frame_game_times(
+    coverage_end_ms: int,
+    *,
+    max_frames: int = _MAX_FRAMES,
+    extractable_end_ms: int | None = None,
+) -> list[int]:
     if coverage_end_ms < 0:
         raise ValueError("coverage_end_ms must be non-negative")
-    times = list(range(0, coverage_end_ms + 1, _FRAME_INTERVAL_MS))
+    if extractable_end_ms is not None and extractable_end_ms < 0:
+        raise ValueError("extractable_end_ms must be non-negative")
+    end_ms = (
+        coverage_end_ms if extractable_end_ms is None else min(coverage_end_ms, extractable_end_ms)
+    )
+    times = list(range(0, end_ms + 1, _FRAME_INTERVAL_MS))
     if not times:
         times = [0]
-    if times[-1] != coverage_end_ms:
-        times.append(coverage_end_ms)
+    if times[-1] != end_ms:
+        times.append(end_ms)
     return times[:max_frames]
 
 

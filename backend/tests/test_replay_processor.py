@@ -538,6 +538,24 @@ def test_frame_plan_caps_at_181_total() -> None:
     assert times[1] == 30_000
 
 
+def test_frame_plan_stays_inside_extractable_window() -> None:
+    """FFmpeg cannot extract a frame at the exact media duration."""
+    from app.services.replays.processor import plan_frame_game_times
+
+    coverage_end_ms = 600_002
+    extractable_end_ms = 599_902
+    times = plan_frame_game_times(
+        coverage_end_ms,
+        extractable_end_ms=extractable_end_ms,
+    )
+
+    assert times[0] == 0
+    assert times[-1] == extractable_end_ms
+    assert all(time_ms <= extractable_end_ms for time_ms in times)
+    assert 600_000 not in times
+    assert coverage_end_ms not in times
+
+
 @pytest.mark.asyncio
 async def test_idempotent_restart_skips_transcode_and_reuses_frames() -> None:
     replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)

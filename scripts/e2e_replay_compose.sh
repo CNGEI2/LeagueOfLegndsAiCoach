@@ -96,6 +96,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Prior local runs can leave replay_data objects behind. Wipe compose
+# resources first so the post-delete zero-file assertion only measures
+# this run's lifecycle, not leftover volume state.
+log "resetting any previous compose stack and volumes"
+docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+
 log "building and starting db, migrate, backend, replay-worker, frontend (REPLAY_ENABLED=true)"
 docker compose up -d --build db migrate backend replay-worker frontend
 

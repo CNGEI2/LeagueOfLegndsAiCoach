@@ -47,6 +47,7 @@ def test_e2e_compose_smoke_requires_platform_and_zero_remaining_replay_objects()
     assert "REPLAY_SMOKE_PLATFORM" in contents
     assert "read_smoke_env_value" in contents
     assert "/.env" in contents
+    assert "docker compose down -v" in contents
     assert "remaining_objects" in contents
     assert '[[ "$remaining_objects" != "0" ]]' in contents
     assert "FAILED: replay_data volume still contains" in contents
