@@ -1,7 +1,31 @@
+from dataclasses import dataclass
+
 from app.core.errors import ApiError
+from app.core.normalization import lookup_key
 from app.core.routing import Platform
 from app.schemas.domain import PlayerProfile
 from app.services.riot.dto import AccountDto, SummonerDto
+
+
+@dataclass(frozen=True)
+class ParsedRiotId:
+    game_name: str
+    tag_line: str
+    game_name_key: str
+    tag_line_key: str
+
+
+def parse_riot_id(value: str) -> ParsedRiotId:
+    normalized = value.strip()
+    game_name, separator, tag_line = normalized.rpartition("#")
+    if not separator or not 1 <= len(game_name) <= 32 or not 1 <= len(tag_line) <= 16:
+        raise _invalid_riot_id()
+    return ParsedRiotId(
+        game_name=game_name,
+        tag_line=tag_line,
+        game_name_key=lookup_key(game_name),
+        tag_line_key=lookup_key(tag_line),
+    )
 
 
 def normalize_player(
@@ -25,5 +49,14 @@ def _invalid_response() -> ApiError:
         status_code=502,
         code="RIOT_INVALID_RESPONSE",
         message="Riot returned an invalid response.",
+        retryable=False,
+    )
+
+
+def _invalid_riot_id() -> ApiError:
+    return ApiError(
+        status_code=422,
+        code="INVALID_RIOT_ID",
+        message="Riot ID is invalid.",
         retryable=False,
     )
