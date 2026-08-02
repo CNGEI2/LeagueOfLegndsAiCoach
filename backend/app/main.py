@@ -20,7 +20,7 @@ from app.core.metrics import metrics as default_metrics
 from app.core.request_id import RequestIdMiddleware
 from app.services.replays.rate_limit import ReplayGatewayRateLimiter, build_rate_limiter
 from app.services.replays.storage.base import ReplayStorage
-from app.services.replays.storage.local import LocalReplayStorage
+from app.services.replays.storage.factory import build_replay_storage
 
 
 def create_app(
@@ -42,8 +42,12 @@ def create_app(
 
     if replay_storage is not None:
         resolved_storage: ReplayStorage | None = replay_storage
-    elif resolved_settings.replay_storage_backend == "local":
-        resolved_storage = LocalReplayStorage(resolved_settings.replay_local_root)
+    elif resolved_settings.replay_enabled:
+        # Build via the factory (not just the local backend) so a
+        # REPLAY_STORAGE_BACKEND=s3 deployment doesn't silently leave
+        # app.state.replay_storage as None, which would 404 every replay
+        # route (see _storage() in app/api/replays.py).
+        resolved_storage = build_replay_storage(resolved_settings)
     else:
         resolved_storage = None
 

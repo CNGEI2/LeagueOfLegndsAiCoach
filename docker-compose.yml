@@ -47,6 +47,7 @@ services:
       REPLAY_S3_SECRET_ACCESS_KEY: ${REPLAY_S3_SECRET_ACCESS_KEY:-}
       REPLAY_S3_PREFIX: ${REPLAY_S3_PREFIX:-replays}
       REPLAY_GATEWAY_RATE_LIMITS_ENFORCED: ${REPLAY_GATEWAY_RATE_LIMITS_ENFORCED:-false}
+      INTERNAL_METRICS_TOKEN: ${INTERNAL_METRICS_TOKEN:-}
     ports:
       - "8000:8000"
     volumes:
@@ -71,7 +72,7 @@ services:
     # relying on `uid`/`gid` tmpfs suboptions (support for those varies by
     # Compose/Engine version).
     tmpfs:
-      - /tmp:size=2G
+      - /tmp:size=12G
       - /var/tmp:size=512M
     # Give an in-flight ffmpeg job a real chance to finish before Docker
     # escalates SIGTERM to SIGKILL. The worker's SIGTERM handler stops

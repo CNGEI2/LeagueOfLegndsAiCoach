@@ -544,7 +544,13 @@ class ReplayService:
             status=ReplayStatus.DELETING,
             values={"updated_at": clock},
         )
-        await self._job_repository.enqueue(
+        # Use the idempotent enqueue here: the retention sweep's
+        # enqueue_due_retention can legitimately race this transition and
+        # already have an active DELETE_ALL job in flight for this replay
+        # (e.g. its derived_delete_after just elapsed). That must not surface
+        # as an error to the caller once the replay itself has successfully
+        # transitioned to deleting.
+        await self._job_repository.enqueue_idempotent(
             replay_id=row.id,
             kind=ReplayJobKind.DELETE_ALL,
             available_at=clock,

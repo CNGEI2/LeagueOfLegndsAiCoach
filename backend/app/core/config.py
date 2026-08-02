@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     replay_gateway_upload_concurrency_limit: int = 2
     replay_gateway_request_limit_per_minute: int = 60
     replay_trusted_proxy_cidrs: str = ""
+    internal_metrics_token: SecretStr = SecretStr("")
 
     model_config = SettingsConfigDict(env_file=ROOT_ENV_FILE, extra="ignore")
 

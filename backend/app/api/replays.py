@@ -12,7 +12,13 @@ from fastapi.responses import StreamingResponse
 
 from app.core.config import Settings
 from app.core.dependencies import AppServices, get_services
-from app.core.errors import ApiError, replay_not_found, replay_rate_limited, replay_too_large
+from app.core.errors import (
+    ApiError,
+    replay_not_found,
+    replay_rate_limited,
+    replay_rate_limiter_unavailable,
+    replay_too_large,
+)
 from app.core.logging import bind_safe_request_context
 from app.core.metrics import MetricsRegistry
 from app.core.metrics import metrics as default_metrics
@@ -72,7 +78,10 @@ async def enforce_gateway_rate_limit(request: Request) -> None:
         return
     limiter = _rate_limiter(request)
     if limiter is None:
-        return
+        # Enforcement is on but there's nothing to enforce it with: fail
+        # closed rather than silently letting every request through
+        # unlimited, which is what returning here would do.
+        raise replay_rate_limiter_unavailable()
     try:
         limiter.check_request(_client_key(request))
     except ReplayRateLimitExceeded as error:
@@ -87,7 +96,7 @@ async def enforce_create_rate_limit(request: Request) -> None:
         return
     limiter = _rate_limiter(request)
     if limiter is None:
-        return
+        raise replay_rate_limiter_unavailable()
     try:
         limiter.check_create(_client_key(request))
     except ReplayRateLimitExceeded as error:
@@ -103,8 +112,7 @@ async def enforce_upload_concurrency_limit(request: Request) -> AsyncIterator[No
         return
     limiter = _rate_limiter(request)
     if limiter is None:
-        yield
-        return
+        raise replay_rate_limiter_unavailable()
     client_key = _client_key(request)
     if not limiter.acquire_upload_slot(client_key):
         _metrics(request).replay_rate_limit_rejections_total.inc(limit="concurrent_uploads")

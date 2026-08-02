@@ -3,8 +3,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, delete, or_, select, true, update
+from sqlalchemy import ColumnElement, and_, case, delete, or_, select, true, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.replay import ReplayArtifactRow, ReplayJobRow, ReplayUploadRow
@@ -80,6 +81,15 @@ class ReplayRepository(Protocol):
 
 class ReplayJobRepository(Protocol):
     async def enqueue(
+        self,
+        *,
+        replay_id: UUID,
+        kind: ReplayJobKind,
+        available_at: datetime,
+        max_attempts: int = 3,
+    ) -> ReplayJobRow: ...
+
+    async def enqueue_idempotent(
         self,
         *,
         replay_id: UUID,
@@ -291,6 +301,49 @@ class SqlReplayJobRepository:
             session.expunge(row)
             return row
 
+    async def enqueue_idempotent(
+        self,
+        *,
+        replay_id: UUID,
+        kind: ReplayJobKind,
+        available_at: datetime,
+        max_attempts: int = 3,
+    ) -> ReplayJobRow:
+        """Enqueue a job, tolerating a concurrent enqueue of the same kind.
+
+        The partial unique index on active jobs (`uq_replay_active_job`)
+        guards against two active jobs of the same kind existing for the same
+        replay at once. Some callers (e.g. a user's request_delete racing the
+        retention sweep's enqueue_due_retention) can legitimately both try to
+        enqueue a DELETE_ALL job for the same replay; whichever loses the race
+        should observe success by returning the job that already won, rather
+        than propagating an IntegrityError.
+        """
+        try:
+            return await self.enqueue(
+                replay_id=replay_id,
+                kind=kind,
+                available_at=available_at,
+                max_attempts=max_attempts,
+            )
+        except IntegrityError:
+            existing = await self._get_active_job(replay_id=replay_id, kind=kind)
+            if existing is None:
+                raise
+            return existing
+
+    async def _get_active_job(self, *, replay_id: UUID, kind: ReplayJobKind) -> ReplayJobRow | None:
+        statement = select(ReplayJobRow).where(
+            ReplayJobRow.replay_id == replay_id,
+            ReplayJobRow.kind == kind.value,
+            ReplayJobRow.status.in_(_ACTIVE_JOB_STATUSES),
+        )
+        async with self._session_factory() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            if row is not None:
+                session.expunge(row)
+            return row
+
     async def claim_next(self, *, worker_id: str, now: datetime) -> ReplayJobRow | None:
         statement = (
             select(ReplayJobRow)
@@ -406,6 +459,15 @@ class SqlReplayJobRepository:
         available_at: datetime,
         now: datetime,
     ) -> int:
+        """Unstick jobs whose worker stopped heartbeating.
+
+        A job still under its retry budget (`attempt_count < max_attempts`)
+        is rescheduled for another attempt. A job that has already exhausted
+        its attempts must be marked FAILED here instead: silently retrying
+        it forever would bypass the max_attempts budget that `fail()` (the
+        normal failure path) already enforces.
+        """
+        can_retry = ReplayJobRow.attempt_count < ReplayJobRow.max_attempts
         statement = (
             update(ReplayJobRow)
             .where(
@@ -414,11 +476,21 @@ class SqlReplayJobRepository:
                 ReplayJobRow.heartbeat_at < heartbeat_before,
             )
             .values(
-                status=ReplayJobStatus.RETRY_SCHEDULED.value,
+                status=case(
+                    (can_retry, ReplayJobStatus.RETRY_SCHEDULED.value),
+                    else_=ReplayJobStatus.FAILED.value,
+                ),
                 worker_id=None,
                 claimed_at=None,
                 heartbeat_at=None,
-                available_at=available_at,
+                available_at=case(
+                    (can_retry, available_at),
+                    else_=ReplayJobRow.available_at,
+                ),
+                finished_at=case(
+                    (can_retry, None),
+                    else_=now,
+                ),
                 updated_at=now,
             )
         )

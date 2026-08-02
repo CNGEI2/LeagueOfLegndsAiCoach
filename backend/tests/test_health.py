@@ -41,6 +41,9 @@ def test_readiness_returns_safe_503_when_database_fails(
 
 
 def test_readiness_is_safe_when_riot_key_is_missing(fake_database: FakeDatabase) -> None:
+    # Readiness must reflect this process's own ability to serve traffic
+    # (database connectivity) so the Compose healthcheck doesn't wedge the
+    # whole stack just because RIOT_API_KEY hasn't been configured yet.
     settings = Settings(
         app_env="test",
         database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
@@ -59,7 +62,8 @@ def test_readiness_is_safe_when_riot_key_is_missing(fake_database: FakeDatabase)
     ) as test_client:
         response = test_client.get("/health/ready")
 
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "RIOT_NOT_CONFIGURED"
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
     assert "RGAPI" not in response.text
-    assert fake_database.ping_count == 0
+    assert "RIOT_NOT_CONFIGURED" not in response.text
+    assert fake_database.ping_count == 1

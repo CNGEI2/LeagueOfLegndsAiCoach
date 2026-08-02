@@ -14,13 +14,11 @@ async def live() -> HealthResponse:
 
 @router.get("/ready", response_model=HealthResponse)
 async def ready(request: Request) -> HealthResponse:
-    if not request.app.state.settings.riot_configured:
-        raise ApiError(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            code="RIOT_NOT_CONFIGURED",
-            message="Riot API is not configured.",
-            retryable=False,
-        )
+    # Readiness must reflect only this process's own ability to serve
+    # traffic. It backs the Compose healthcheck for the backend service, so
+    # gating it on an optional external dependency (the Riot API key) would
+    # wedge the whole stack's startup ordering whenever that key isn't
+    # configured yet (e.g. in local/dev environments).
     database: DatabaseProtocol = request.app.state.database
     try:
         await database.ping()

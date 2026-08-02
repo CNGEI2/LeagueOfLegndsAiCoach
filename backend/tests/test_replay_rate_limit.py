@@ -318,3 +318,64 @@ def test_upload_concurrency_limit_rejects_a_second_concurrent_put(
     assert registry.replay_rate_limit_rejections_total.value(limit="concurrent_uploads") == 1
 
     limiter.release_upload_slot(client_key)
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed behavior: enforcement must not silently no-op when the limiter
+# is missing while enforcement is turned on.
+# ---------------------------------------------------------------------------
+
+
+def test_create_endpoint_fails_closed_with_503_when_limiter_is_missing(
+    enforced_client: tuple[TestClient, MetricsRegistry],
+) -> None:
+    client, _registry = enforced_client
+    client.app.state.replay_rate_limiter = None  # type: ignore[attr-defined]
+
+    response = client.post("/api/v1/replays", json=VALID_PAYLOAD)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "REPLAY_RATE_LIMITER_UNAVAILABLE"
+
+
+def test_ordinary_request_fails_closed_with_503_when_limiter_is_missing(
+    enforced_client: tuple[TestClient, MetricsRegistry],
+) -> None:
+    client, _registry = enforced_client
+    replay_id = ControllableReplayService().create_result.replay_id
+    client.app.state.replay_rate_limiter = None  # type: ignore[attr-defined]
+
+    response = client.get(
+        f"/api/v1/replays/{replay_id}",
+        headers={"Authorization": "Bearer returned-once"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "REPLAY_RATE_LIMITER_UNAVAILABLE"
+
+
+def test_upload_endpoint_fails_closed_with_503_when_limiter_is_missing(
+    enforced_client: tuple[TestClient, MetricsRegistry],
+) -> None:
+    client, _registry = enforced_client
+    replay_id = ControllableReplayService().create_result.replay_id
+    client.app.state.replay_rate_limiter = None  # type: ignore[attr-defined]
+
+    response = client.put(
+        f"/api/v1/replays/{replay_id}/content",
+        content=b"0123456789",
+        headers={"Authorization": "Bearer returned-once", "Content-Length": "10"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "REPLAY_RATE_LIMITER_UNAVAILABLE"
+
+
+def test_disabled_rate_limits_do_not_require_a_limiter(tmp_path: Path) -> None:
+    """When enforcement is off, a missing limiter must still be a no-op."""
+    client, _registry = _build_client(tmp_path=tmp_path, rate_limits_enforced=False)
+    with client:
+        client.app.state.replay_rate_limiter = None  # type: ignore[attr-defined]
+        response = client.post("/api/v1/replays", json=VALID_PAYLOAD)
+
+    assert response.status_code == 201

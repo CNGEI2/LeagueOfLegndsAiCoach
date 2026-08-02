@@ -230,19 +230,25 @@ async def test_delete_all_skips_cleanup_lag_when_no_deadline_present() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_internal_metrics_endpoint_renders_prometheus_text() -> None:
+def _metrics_app_settings(**overrides: object):
     from app.core.config import Settings
 
+    values: dict[str, object] = {
+        "_env_file": None,
+        "app_env": "test",
+        "database_url": "postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        "riot_api_key": "RGAPI-test",
+    }
+    values.update(overrides)
+    return Settings(**values)  # type: ignore[arg-type]
+
+
+def _metrics_app(**settings_overrides: object) -> tuple[TestClient, MetricsRegistry]:
     registry = MetricsRegistry()
     registry.replay_processing_failures_total.inc(error_code="REPLAY_PROCESSING_FAILED")
     registry.replay_processing_duration_seconds.observe(12.5, stage="total")
 
-    settings = Settings(
-        _env_file=None,
-        app_env="test",
-        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
-        riot_api_key="RGAPI-test",
-    )
+    settings = _metrics_app_settings(**settings_overrides)
     services = AppServices(
         player_service=object(),  # type: ignore[arg-type]
         match_service=object(),  # type: ignore[arg-type]
@@ -255,9 +261,17 @@ def test_internal_metrics_endpoint_renders_prometheus_text() -> None:
         services=services,
         replay_metrics=registry,
     )
+    return TestClient(application), registry
 
-    with TestClient(application) as client:
-        response = client.get("/internal/metrics")
+
+def test_internal_metrics_endpoint_renders_prometheus_text_with_valid_bearer_token() -> None:
+    client, _registry = _metrics_app(internal_metrics_token="test-metrics-token")
+
+    with client:
+        response = client.get(
+            "/internal/metrics",
+            headers={"Authorization": "Bearer test-metrics-token"},
+        )
 
     assert response.status_code == 200
     body = response.text
@@ -266,3 +280,36 @@ def test_internal_metrics_endpoint_renders_prometheus_text() -> None:
     assert "# TYPE replay_processing_duration_seconds histogram" in body
     assert 'replay_processing_duration_seconds_sum{stage="total"} 12.5' in body
     assert 'replay_processing_duration_seconds_count{stage="total"} 1' in body
+
+
+def test_internal_metrics_endpoint_returns_404_when_token_is_not_configured() -> None:
+    # Fail closed: with no token configured, the endpoint must not exist at
+    # all rather than silently serve metrics to anyone on the network.
+    client, _registry = _metrics_app(internal_metrics_token="")
+
+    with client:
+        response = client.get("/internal/metrics")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "INTERNAL_METRICS_NOT_CONFIGURED"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Authorization": "Bearer wrong-token"},
+        {"Authorization": "Basic dGVzdC1tZXRyaWNzLXRva2Vu"},
+        {"Authorization": "Bearer"},
+    ],
+)
+def test_internal_metrics_endpoint_returns_401_for_missing_or_wrong_bearer_token(
+    headers: dict[str, str],
+) -> None:
+    client, _registry = _metrics_app(internal_metrics_token="test-metrics-token")
+
+    with client:
+        response = client.get("/internal/metrics", headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INTERNAL_METRICS_UNAUTHORIZED"

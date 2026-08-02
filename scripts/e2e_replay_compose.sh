@@ -27,8 +27,10 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-api_base_url="${SMOKE_API_BASE_URL:-http://localhost:8000}"
-frontend_base_url="${E2E_FRONTEND_BASE_URL:-http://localhost:3000}"
+# Prefer IPv4 literals so a local process bound only on [::1] cannot steal
+# traffic meant for the Compose-published ports.
+api_base_url="${SMOKE_API_BASE_URL:-http://127.0.0.1:8000}"
+frontend_base_url="${E2E_FRONTEND_BASE_URL:-http://127.0.0.1:3000}"
 compose_up_timeout_seconds="${E2E_COMPOSE_TIMEOUT_SECONDS:-180}"
 
 log() {
@@ -52,26 +54,38 @@ fi
 
 cd "$repo_dir"
 
+# Compose defaults leave REPLAY_ENABLED=false so the worker refuses to start.
+# For this E2E path we force a local, ephemeral replay stack. The token secret
+# is generated per run and never written to the repo; operators may override
+# via the environment when exercising a longer-lived stack.
+export REPLAY_ENABLED=true
+export REPLAY_STORAGE_BACKEND="${REPLAY_STORAGE_BACKEND:-local}"
+# Settings require >= 32 bytes when replay is enabled.
+if [[ -z "${REPLAY_TOKEN_SECRET:-}" || ${#REPLAY_TOKEN_SECRET} -lt 32 ]]; then
+  REPLAY_TOKEN_SECRET="e2e-$(openssl rand -hex 32 2>/dev/null || printf '0123456789abcdef0123456789abcdef')-not-for-prod"
+  export REPLAY_TOKEN_SECRET
+fi
+
 cleanup() {
   log "tearing down the compose stack (docker compose down -v)"
   docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-log "building and starting db, migrate, backend, replay-worker, frontend"
+log "building and starting db, migrate, backend, replay-worker, frontend (REPLAY_ENABLED=true)"
 docker compose up -d --build db migrate backend replay-worker frontend
 
 log "waiting up to ${compose_up_timeout_seconds}s for backend and replay-worker to report healthy"
 deadline=$((SECONDS + compose_up_timeout_seconds))
 while true; do
-  backend_status="$(docker compose ps --format '{{.Health}}' backend 2>/dev/null || true)"
-  worker_status="$(docker compose ps --format '{{.Health}}' replay-worker 2>/dev/null || true)"
+  backend_status="$(docker compose ps backend --format '{{.Health}}' 2>/dev/null | tr -d '\r' || true)"
+  worker_status="$(docker compose ps replay-worker --format '{{.Health}}' 2>/dev/null | tr -d '\r' || true)"
   if [[ "$backend_status" == "healthy" && "$worker_status" == "healthy" ]]; then
     log "backend and replay-worker are healthy"
     break
   fi
   if (( SECONDS >= deadline )); then
-    log "FAILED: backend/replay-worker did not become healthy within ${compose_up_timeout_seconds}s"
+    log "FAILED: backend/replay-worker did not become healthy within ${compose_up_timeout_seconds}s (backend=${backend_status:-unknown} worker=${worker_status:-unknown})"
     docker compose logs --tail=100 backend replay-worker || true
     exit 1
   fi
@@ -79,10 +93,26 @@ while true; do
 done
 
 log "checking the zh-CN and en-US locale routes on the frontend"
+frontend_ready_deadline=$((SECONDS + 60))
+while true; do
+  probe_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${frontend_base_url}/zh-CN" || true)"
+  probe_code="${probe_code:-000}"
+  if [[ "$probe_code" == "200" ]]; then
+    break
+  fi
+  if (( SECONDS >= frontend_ready_deadline )); then
+    log "FAILED: frontend did not respond on ${frontend_base_url} within 60s (last HTTP ${probe_code})"
+    docker compose logs --tail=100 frontend || true
+    exit 1
+  fi
+  sleep 2
+done
 for locale in zh-CN en-US; do
-  status_code="$(curl -s -o /dev/null -w '%{http_code}' "${frontend_base_url}/${locale}" || echo "000")"
+  status_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${frontend_base_url}/${locale}" || true)"
+  status_code="${status_code:-000}"
   if [[ "$status_code" != "200" ]]; then
     log "FAILED: frontend locale route /${locale} returned HTTP ${status_code}"
+    docker compose logs --tail=50 frontend || true
     exit 1
   fi
   log "frontend locale route /${locale} responded 200"

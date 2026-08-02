@@ -236,6 +236,62 @@ async def test_duplicate_active_job_enqueue_is_blocked(session_factory) -> None:
 
 
 @pytest.mark.asyncio
+async def test_enqueue_idempotent_succeeds_when_active_job_of_same_kind_exists(
+    session_factory,
+) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    replay = await replays.create(make_replay())
+
+    first = await jobs.enqueue_idempotent(
+        replay_id=replay.id,
+        kind=ReplayJobKind.DELETE_ALL,
+        available_at=now,
+    )
+
+    # A concurrent caller (e.g. the retention sweep racing a user's delete
+    # request) must not blow up on the partial unique index; it should
+    # observe the already-active job and return it instead.
+    second = await jobs.enqueue_idempotent(
+        replay_id=replay.id,
+        kind=ReplayJobKind.DELETE_ALL,
+        available_at=now,
+    )
+
+    assert second.id == first.id
+    async with session_factory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(ReplayJobRow).where(
+                        ReplayJobRow.replay_id == replay.id,
+                        ReplayJobRow.kind == ReplayJobKind.DELETE_ALL.value,
+                    )
+                )
+            ).scalars()
+        )
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_enqueue_idempotent_creates_job_when_none_active(session_factory) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    replay = await replays.create(make_replay())
+
+    created = await jobs.enqueue_idempotent(
+        replay_id=replay.id,
+        kind=ReplayJobKind.DELETE_ALL,
+        available_at=now,
+    )
+
+    assert created.status == ReplayJobStatus.PENDING.value
+    assert created.kind == ReplayJobKind.DELETE_ALL.value
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_succeed_and_fail_update_job_lifecycle(session_factory) -> None:
     now = _now()
     replays = SqlReplayRepository(session_factory)
@@ -324,6 +380,94 @@ async def test_recover_stale_reschedules_expired_running_jobs(session_factory) -
     assert row.claimed_at is None
     assert row.heartbeat_at is None
     assert row.available_at == available_at
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_marks_failed_instead_of_retrying_when_max_attempts_exhausted(
+    session_factory,
+) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    replay = await replays.create(make_replay())
+    claimed_at = now - timedelta(minutes=10)
+    await jobs.enqueue(
+        replay_id=replay.id,
+        kind=ReplayJobKind.PROCESS,
+        available_at=claimed_at,
+        max_attempts=1,
+    )
+    claimed = await jobs.claim_next(worker_id="stale-worker", now=claimed_at)
+    assert claimed is not None
+    assert claimed.attempt_count == 1
+    assert claimed.max_attempts == 1
+
+    available_at = now + timedelta(minutes=2)
+    recovered = await jobs.recover_stale(
+        heartbeat_before=now - timedelta(minutes=5),
+        available_at=available_at,
+        now=now,
+    )
+    assert recovered == 1
+    async with session_factory() as session:
+        row = (
+            await session.execute(select(ReplayJobRow).where(ReplayJobRow.id == claimed.id))
+        ).scalar_one()
+    assert row.status == ReplayJobStatus.FAILED.value
+    assert row.finished_at == now
+    assert row.worker_id is None
+    assert row.claimed_at is None
+    assert row.heartbeat_at is None
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_only_reschedules_jobs_below_max_attempts_in_mixed_batch(
+    session_factory,
+) -> None:
+    now = _now()
+    replays = SqlReplayRepository(session_factory)
+    jobs = SqlReplayJobRepository(session_factory)
+    claimed_at = now - timedelta(minutes=10)
+
+    retryable_replay = await replays.create(make_replay(match_id="NA1_retryable"))
+    await jobs.enqueue(
+        replay_id=retryable_replay.id,
+        kind=ReplayJobKind.PROCESS,
+        available_at=claimed_at,
+        max_attempts=3,
+    )
+    retryable_job = await jobs.claim_next(worker_id="stale-worker", now=claimed_at)
+    assert retryable_job is not None
+
+    exhausted_replay = await replays.create(make_replay(match_id="NA1_exhausted"))
+    await jobs.enqueue(
+        replay_id=exhausted_replay.id,
+        kind=ReplayJobKind.PROCESS,
+        available_at=claimed_at,
+        max_attempts=1,
+    )
+    exhausted_job = await jobs.claim_next(worker_id="stale-worker", now=claimed_at)
+    assert exhausted_job is not None
+
+    available_at = now + timedelta(minutes=2)
+    recovered = await jobs.recover_stale(
+        heartbeat_before=now - timedelta(minutes=5),
+        available_at=available_at,
+        now=now,
+    )
+    assert recovered == 2
+
+    async with session_factory() as session:
+        retryable_row = (
+            await session.execute(select(ReplayJobRow).where(ReplayJobRow.id == retryable_job.id))
+        ).scalar_one()
+        exhausted_row = (
+            await session.execute(select(ReplayJobRow).where(ReplayJobRow.id == exhausted_job.id))
+        ).scalar_one()
+    assert retryable_row.status == ReplayJobStatus.RETRY_SCHEDULED.value
+    assert retryable_row.available_at == available_at
+    assert exhausted_row.status == ReplayJobStatus.FAILED.value
+    assert exhausted_row.finished_at == now
 
 
 @pytest.mark.asyncio

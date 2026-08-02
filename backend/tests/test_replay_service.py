@@ -247,6 +247,37 @@ class FakeReplayJobRepository:
     async def enqueue_due_retention(self, now: datetime) -> int:
         raise AssertionError("enqueue_due_retention should not be called from ReplayService")
 
+    async def enqueue_idempotent(
+        self,
+        *,
+        replay_id: UUID,
+        kind: ReplayJobKind,
+        available_at: datetime,
+        max_attempts: int = 3,
+    ) -> ReplayJobRow:
+        # Mirrors the real repository's behavior when the partial unique index
+        # on active jobs is hit: succeed without inserting a duplicate row.
+        active = [
+            job
+            for job in self.jobs
+            if job.replay_id == replay_id
+            and job.kind == kind.value
+            and job.status
+            in {
+                ReplayJobStatus.PENDING.value,
+                ReplayJobStatus.RUNNING.value,
+                ReplayJobStatus.RETRY_SCHEDULED.value,
+            }
+        ]
+        if active:
+            return active[0]
+        return await self.enqueue(
+            replay_id=replay_id,
+            kind=kind,
+            available_at=available_at,
+            max_attempts=max_attempts,
+        )
+
 
 @dataclass
 class FakeReplayArtifactRepository:
@@ -744,6 +775,31 @@ async def test_request_delete_transitions_to_deleting_and_enqueues_cleanup() -> 
     again = await service.request_delete(row.id, token, now=NOW)
     assert again.status == ReplayStatus.DELETING
     assert len(job_repo.jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_request_delete_is_idempotent_when_retention_already_enqueued_delete_all() -> None:
+    """Regression test: retention's enqueue_due_retention can race a user's
+    request_delete for the same replay. Both try to create an active
+    DELETE_ALL job; the second one must not blow up on the unique index and
+    must still report the replay as transitioning to deleting."""
+    service, _, replay_repo, job_repo, *_ = _service()
+    row, token = await _seed_replay(replay_repo, status=ReplayStatus.READY)
+
+    # Simulate retention having already enqueued an active DELETE_ALL job for
+    # this replay before the user's delete request reaches the service.
+    existing_job = await job_repo.enqueue(
+        replay_id=row.id,
+        kind=ReplayJobKind.DELETE_ALL,
+        available_at=NOW,
+    )
+
+    result = await service.request_delete(row.id, token, now=NOW)
+
+    assert result.status == ReplayStatus.DELETING
+    assert len(job_repo.jobs) == 1
+    assert job_repo.jobs[0].id == existing_job.id
+    assert job_repo.jobs[0].kind == ReplayJobKind.DELETE_ALL.value
 
 
 @pytest.mark.asyncio

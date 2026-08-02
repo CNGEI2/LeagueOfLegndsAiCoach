@@ -47,6 +47,15 @@ def replay_too_large() -> ApiError:
     )
 
 
+def replay_rate_limiter_unavailable() -> ApiError:
+    return ApiError(
+        status_code=503,
+        code="REPLAY_RATE_LIMITER_UNAVAILABLE",
+        message="Replay gateway rate limiting is temporarily unavailable.",
+        retryable=True,
+    )
+
+
 def replay_rate_limited(retry_after_seconds: float | None = None) -> ApiError:
     params: dict[str, Any] = {}
     headers: dict[str, str] = {}
