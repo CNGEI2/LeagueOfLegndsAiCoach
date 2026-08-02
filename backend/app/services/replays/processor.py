@@ -56,7 +56,10 @@ _NON_RETRYABLE_MEDIA_CODES = frozenset(
 
 
 class ReplayProcessingCancelled(Exception):
-    """Replay became deleting during processing; stop without promoting outputs."""
+    """Replay became deleting/deleted during processing; stop without promoting outputs."""
+
+
+_PROCESS_CANCEL_STATUSES = frozenset({ReplayStatus.DELETING, ReplayStatus.DELETED})
 
 
 class ReplayProcessor:
@@ -89,6 +92,9 @@ class ReplayProcessor:
         except ReplayProcessingCancelled:
             await self._jobs.cancel(job.id, now=self._clock())
             job.status = ReplayJobStatus.CANCELLED.value
+            # DELETE_ALL may already have finished; still sweep derived outputs
+            # idempotently so a late PROCESS upload cannot leave residue.
+            await self._sweep_cancelled_derived(job.replay_id)
         except Exception as error:
             await self._handle_process_failure(job, error)
         else:
@@ -584,7 +590,7 @@ class ReplayProcessor:
 
     async def _ensure_not_deleting(self, row: ReplayUploadRow) -> None:
         latest = await self._require_replay(row.id)
-        if ReplayStatus(latest.status) == ReplayStatus.DELETING:
+        if ReplayStatus(latest.status) in _PROCESS_CANCEL_STATUSES:
             raise ReplayProcessingCancelled()
 
     async def _upload_if_not_deleting(
@@ -602,6 +608,12 @@ class ReplayProcessor:
             await self._delete_missing_ok(key)
             raise
         return stored
+
+    async def _sweep_cancelled_derived(self, replay_id: UUID) -> None:
+        """Idempotent cleanup of PROCESS outputs after cancellation."""
+        for prefix in (f"normalized/{replay_id}", f"frames/{replay_id}"):
+            await self._storage.delete_prefix(prefix)
+        await self._artifacts.delete_rows(replay_id)
 
     async def _require_replay(self, replay_id: UUID) -> ReplayUploadRow:
         row = await self._replays.get(replay_id)

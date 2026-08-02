@@ -874,8 +874,93 @@ async def test_user_delete_during_normalized_upload_does_not_leave_media() -> No
     assert job.status == ReplayJobStatus.CANCELLED.value
     assert "job_cancelled" in events
     assert replay_repo.rows[replay.id].status == ReplayStatus.DELETING.value
+    assert f"delete_prefix:normalized/{replay.id}" in events
+    assert f"delete_prefix:frames/{replay.id}" in events
+    assert "artifact_rows_deleted" in events
     assert not any(key.startswith("normalized/") for key in store.objects)
     assert not any(key.startswith(f"frames/{replay.id}") for key in store.objects)
+    assert artifact_repo.rows == []
+
+
+@pytest.mark.asyncio
+async def test_process_upload_races_completed_delete_all_ends_deleted_with_zero_derived() -> None:
+    """PROCESS upload concurrent with finished DELETE_ALL leaves no derived media."""
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    events: list[str] = []
+    upload_started = asyncio.Event()
+    delete_finished = asyncio.Event()
+
+    class ConcurrentStorage(FakeReplayStorage):
+        async def upload_from_path(self, key: str, source: Path) -> StoredObject:
+            if "normalized/" in key:
+                upload_started.set()
+                await delete_finished.wait()
+            return await super().upload_from_path(key, source)
+
+    store = ConcurrentStorage(
+        objects={replay.source_object_key or "": SOURCE_BYTES},
+        events=events,
+    )
+    processor, replay_repo, job_repo, artifact_repo, _, _, _ = _processor(
+        replay=replay, events=events, storage=store
+    )
+    process_job = _job(replay.id)
+    delete_job = _job(replay.id, kind=ReplayJobKind.DELETE_ALL)
+    job_repo.jobs[process_job.id] = process_job
+    job_repo.jobs[delete_job.id] = delete_job
+
+    process_task = asyncio.create_task(processor.process(process_job))
+    await upload_started.wait()
+    await processor.delete_all(delete_job)
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    delete_finished.set()
+    await process_task
+
+    assert delete_job.status == ReplayJobStatus.SUCCEEDED.value
+    assert process_job.status == ReplayJobStatus.CANCELLED.value
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert not any(key.startswith("normalized/") for key in store.objects)
+    assert not any(key.startswith(f"frames/{replay.id}") for key in store.objects)
+    assert not any(key.startswith(f"source/{replay.id}") for key in store.objects)
+    assert artifact_repo.rows == []
+    assert f"delete_prefix:normalized/{replay.id}" in events
+    assert f"delete_prefix:frames/{replay.id}" in events
+
+
+@pytest.mark.asyncio
+async def test_deleted_status_cancels_processing_like_deleting() -> None:
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    events: list[str] = []
+    replay_repo_holder: dict[str, FakeReplayRepository] = {}
+
+    class DeletedDuringNormalize(FakeMediaRunner):
+        async def normalize(
+            self,
+            input_path: Path,
+            output_path: Path,
+            probe: MediaProbe,
+            progress: Any = None,
+        ) -> MediaProbe:
+            await replay_repo_holder["repo"].scrub_deleted(replay.id, now=NOW)
+            return await super().normalize(input_path, output_path, probe, progress)
+
+    media = DeletedDuringNormalize(
+        events=events,
+        source_probe=_probe(duration_seconds=1800.0),
+        normalized_probe=_probe(duration_seconds=1800.0),
+    )
+    processor, replay_repo, job_repo, artifact_repo, store, _, _ = _processor(
+        replay=replay, events=events, media=media
+    )
+    replay_repo_holder["repo"] = replay_repo
+    job = _job(replay.id)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.CANCELLED.value
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert not any(key.startswith("normalized/") for key in store.objects)
     assert artifact_repo.rows == []
 
 

@@ -285,7 +285,7 @@ CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。
 | `TEST_DATABASE_URL` | `make verify-postgres` 使用的独立可清理 PostgreSQL 数据库。 |
 | `RIOT_API_KEY` | 仅后端使用的 Riot 密钥；`.env.example` 必须为空。 |
 | `RIOT_SMOKE_GAME_NAME` / `RIOT_SMOKE_TAG_LINE` | 被忽略的本地冒烟身份；不要提交真实玩家标识。 |
-| `RIOT_SMOKE_PLATFORM` | 冒烟平台；Phase 2 仅支持 `NA1`。 |
+| `RIOT_SMOKE_PLATFORM` | 兼容 resolve 冒烟平台（封闭目录中的平台代码，如 `NA1` / `EUW1` / `KR`）。 |
 | `SMOKE_API_BASE_URL` | 已运行本地后端的基础地址，默认 `http://localhost:8000`。 |
 | `NEXT_PUBLIC_API_BASE_URL` | 浏览器可见的后端基础地址；不包含密钥。 |
 | `REPLAY_ENABLED` | 启用 Replay API/worker；默认 `false`。 |
