@@ -842,6 +842,44 @@ async def test_automatic_retry_keeps_replay_queued_while_process_job_is_active()
 
 
 @pytest.mark.asyncio
+async def test_user_delete_during_normalized_upload_does_not_leave_media() -> None:
+    """Delete can race the post-check upload: object must not survive cancel."""
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    events: list[str] = []
+    replay_repo_holder: dict[str, FakeReplayRepository] = {}
+
+    class RaceStorage(FakeReplayStorage):
+        async def upload_from_path(self, key: str, source: Path) -> StoredObject:
+            stored = await super().upload_from_path(key, source)
+            if "normalized/" in key:
+                # Concurrent delete_all already finished its prefix sweep and
+                # marked the replay deleting; any object written after that
+                # sweep would otherwise remain as durable media residue.
+                replay_repo_holder["repo"].rows[replay.id].status = ReplayStatus.DELETING.value
+            return stored
+
+    store = RaceStorage(
+        objects={replay.source_object_key or "": SOURCE_BYTES},
+        events=events,
+    )
+    processor, replay_repo, job_repo, artifact_repo, _, _, _ = _processor(
+        replay=replay, events=events, storage=store
+    )
+    replay_repo_holder["repo"] = replay_repo
+    job = _job(replay.id)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.CANCELLED.value
+    assert "job_cancelled" in events
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETING.value
+    assert not any(key.startswith("normalized/") for key in store.objects)
+    assert not any(key.startswith(f"frames/{replay.id}") for key in store.objects)
+    assert artifact_repo.rows == []
+
+
+@pytest.mark.asyncio
 async def test_user_delete_mid_process_cancels_at_stage_boundary() -> None:
     replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
     events: list[str] = []

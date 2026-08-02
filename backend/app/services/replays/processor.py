@@ -35,6 +35,7 @@ from app.services.replays.media import (
 from app.services.replays.storage.base import (
     ReplayObjectNotFound,
     ReplayStorage,
+    StoredObject,
     temp_upload_key,
 )
 
@@ -340,8 +341,7 @@ class ReplayProcessor:
             ),
         )
 
-        await self._ensure_not_deleting(row)
-        uploaded = await self._storage.upload_from_path(normalized_key, normalized_path)
+        uploaded = await self._upload_if_not_deleting(row, normalized_key, normalized_path)
         del uploaded
 
         coverage = calculate_coverage(
@@ -470,7 +470,7 @@ class ReplayProcessor:
 
         frame_path = scratch / f"frame-{uuid4().hex}.jpg"
         await self._media.extract_frame(normalized_path, video_time_ms, frame_path)
-        stored = await self._storage.upload_from_path(object_key, frame_path)
+        stored = await self._upload_if_not_deleting(row, object_key, frame_path)
         artifact = ReplayArtifactRow(
             id=uuid4(),
             replay_id=row.id,
@@ -586,6 +586,22 @@ class ReplayProcessor:
         latest = await self._require_replay(row.id)
         if ReplayStatus(latest.status) == ReplayStatus.DELETING:
             raise ReplayProcessingCancelled()
+
+    async def _upload_if_not_deleting(
+        self,
+        row: ReplayUploadRow,
+        key: str,
+        source: Path,
+    ) -> StoredObject:
+        """Upload only while active; roll back objects written after delete wins."""
+        await self._ensure_not_deleting(row)
+        stored = await self._storage.upload_from_path(key, source)
+        try:
+            await self._ensure_not_deleting(row)
+        except ReplayProcessingCancelled:
+            await self._delete_missing_ok(key)
+            raise
+        return stored
 
     async def _require_replay(self, replay_id: UUID) -> ReplayUploadRow:
         row = await self._replays.get(replay_id)
