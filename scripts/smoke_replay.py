@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlencode
 from uuid import UUID
 
 from app.core.config import ROOT_ENV_FILE
@@ -111,6 +112,15 @@ def run_smoke(
             generate_smoke_video(output_path=owned_video, ffmpeg_path=ffmpeg_path)
 
         size_bytes = owned_video.stat().st_size
+        # Compose provisions an empty database. Fetching detail through the
+        # public match route validates the selected player and persists the
+        # replay-binding snapshot before the replay create call.
+        match_query = urlencode({"platform": platform, "puuid": puuid})
+        _request_json(
+            client,
+            "GET",
+            f"{api_base_url.rstrip('/')}/api/v1/matches/{match_id}?{match_query}",
+        )
         created = _request_json(
             client,
             "POST",
@@ -187,6 +197,14 @@ def run_smoke(
             f"{api_base_url.rstrip('/')}/api/v1/replays/{replay_id}",
             headers={"Authorization": f"Bearer {access_token}"},
         )
+        _poll_deleted(
+            client,
+            api_base_url=api_base_url,
+            replay_id=replay_id,
+            access_token=access_token,
+            poll_interval_seconds=poll_interval_seconds,
+            poll_timeout_seconds=poll_timeout_seconds,
+        )
         print(f"replay=ready artifacts={len(artifacts)} delete=ok")
     finally:
         if temporary_dir is not None:
@@ -217,6 +235,34 @@ def _poll_ready(
             raise SmokeFailure("SMOKE_TERMINAL_STATUS")
         if time.monotonic() >= deadline:
             raise SmokeFailure("SMOKE_TIMEOUT")
+        if poll_interval_seconds > 0:
+            time.sleep(poll_interval_seconds)
+
+
+def _poll_deleted(
+    client: SmokeClient,
+    *,
+    api_base_url: str,
+    replay_id: str,
+    access_token: str,
+    poll_interval_seconds: float,
+    poll_timeout_seconds: float,
+) -> dict[str, object]:
+    deadline = time.monotonic() + poll_timeout_seconds
+    while True:
+        payload = _request_json(
+            client,
+            "GET",
+            f"{api_base_url.rstrip('/')}/api/v1/replays/{replay_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        status = payload.get("status")
+        if status == "deleted":
+            return payload
+        if status in {"failed", "expired"}:
+            raise SmokeFailure("SMOKE_TERMINAL_STATUS")
+        if time.monotonic() >= deadline:
+            raise SmokeFailure("SMOKE_DELETE_TIMEOUT")
         if poll_interval_seconds > 0:
             time.sleep(poll_interval_seconds)
 
@@ -349,7 +395,7 @@ def main() -> int:
                 api_base_url=_env_value("SMOKE_API_BASE_URL") or "http://localhost:8000",
                 match_id=_env_value("REPLAY_SMOKE_MATCH_ID"),
                 puuid=_env_value("REPLAY_SMOKE_PUUID"),
-                platform="NA1",
+                platform=_env_value("REPLAY_SMOKE_PLATFORM") or "NA1",
                 ffmpeg_path=_env_value("REPLAY_FFMPEG_PATH") or "ffmpeg",
             )
     except SmokeFailure as error:

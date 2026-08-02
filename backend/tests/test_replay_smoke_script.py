@@ -178,6 +178,7 @@ def test_smoke_reports_generic_ready_counts_without_secrets(
             ],
             "PUT": [FakeResponse({}, status_code=204)],
             "GET": [
+                FakeResponse({"match_id": match_id, "platform": "NA1"}),
                 FakeResponse(
                     {
                         "replay_id": replay_id,
@@ -205,6 +206,14 @@ def test_smoke_reports_generic_ready_counts_without_secrets(
                             {"artifact_id": str(uuid4())},
                         ],
                         "request_id": "d" * 32,
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "replay_id": replay_id,
+                        "status": "deleted",
+                        "processing_stage": None,
+                        "progress_percent": 0,
                     }
                 ),
             ],
@@ -259,3 +268,73 @@ def test_smoke_reports_generic_ready_counts_without_secrets(
         "request_id",
     ):
         assert sensitive not in output
+
+
+def test_smoke_seeds_configured_platform_match_then_waits_for_async_delete(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Compose starts with an empty DB, so smoke must cache the match first.
+
+    DELETE only starts asynchronous retention work; the smoke result is valid
+    only after a subsequent status poll reports `deleted`.
+    """
+    smoke = _load_smoke_module()
+    replay_id = str(uuid4())
+    video_path = tmp_path / "fixture.mp4"
+    video_path.write_bytes(b"fixture")
+    platform = "EUW1"
+    match_id = "EUW1_123456789"
+    puuid = "smoke-player-puuid"
+    token = "smoke-access-token"
+    client = FakeSmokeClient(
+        responses={
+            "GET": [
+                FakeResponse({"match_id": match_id, "platform": platform}),
+                FakeResponse({"replay_id": replay_id, "status": "ready"}),
+                FakeResponse({"artifacts": []}),
+                FakeResponse({"replay_id": replay_id, "status": "deleted"}),
+            ],
+            "POST": [
+                FakeResponse(
+                    {
+                        "replay_id": replay_id,
+                        "access_token": token,
+                        "status": "created",
+                        "upload": {
+                            "method": "PUT",
+                            "url": f"/api/v1/replays/{replay_id}/content",
+                            "headers": {},
+                        },
+                    }
+                ),
+                FakeResponse({"replay_id": replay_id, "status": "queued"}),
+            ],
+            "PUT": [FakeResponse({}, status_code=204)],
+            "DELETE": [FakeResponse({"replay_id": replay_id, "status": "deleting"})],
+        }
+    )
+
+    smoke.run_smoke(
+        client=client,
+        api_base_url="http://localhost:8000",
+        match_id=match_id,
+        puuid=puuid,
+        platform=platform,
+        video_path=video_path,
+        poll_interval_seconds=0,
+        poll_timeout_seconds=1,
+    )
+
+    assert client.requests[0][0:2] == (
+        "GET",
+        f"http://localhost:8000/api/v1/matches/{match_id}?platform={platform}&puuid={puuid}",
+    )
+    create_request = next(request for request in client.requests if request[0] == "POST")
+    assert create_request[3] is not None
+    assert create_request[3]["platform"] == platform  # type: ignore[index]
+    delete_index = next(
+        index for index, request in enumerate(client.requests) if request[0] == "DELETE"
+    )
+    assert client.requests[delete_index + 1][0] == "GET"
+    assert capsys.readouterr().out == "replay=ready artifacts=0 delete=ok\n"

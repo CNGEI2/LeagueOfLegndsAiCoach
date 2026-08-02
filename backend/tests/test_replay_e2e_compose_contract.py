@@ -40,6 +40,18 @@ def test_e2e_compose_script_drives_docker_compose_and_smoke_replay() -> None:
     assert "smoke_replay.py" in contents or "smoke-replay" in contents
 
 
+def test_e2e_compose_smoke_requires_platform_and_zero_remaining_replay_objects() -> None:
+    """A DELETE acknowledgement is insufficient until async cleanup is done."""
+    contents = E2E_SCRIPT.read_text(encoding="utf-8")
+
+    assert "REPLAY_SMOKE_PLATFORM" in contents
+    assert "read_smoke_env_value" in contents
+    assert "/.env" in contents
+    assert "remaining_objects" in contents
+    assert '[[ "$remaining_objects" != "0" ]]' in contents
+    assert "FAILED: replay_data volume still contains" in contents
+
+
 def test_e2e_compose_script_notes_when_docker_is_unavailable() -> None:
     contents = E2E_SCRIPT.read_text(encoding="utf-8").lower()
     assert "docker" in contents

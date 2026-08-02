@@ -7,9 +7,10 @@
 #      healthchecks to report healthy.
 #   2. Confirm the frontend serves both the zh-CN and en-US locale routes
 #      (`/zh-CN`, `/en-US`) with a successful response.
-#   3. If a live smoke identity is configured (REPLAY_SMOKE_MATCH_ID /
-#      REPLAY_SMOKE_PUUID, same as `make smoke-replay`), run the full Replay
-#      R1 flow against the composed backend: create -> local upload ->
+#   3. If a live smoke identity is configured (REPLAY_SMOKE_PLATFORM /
+#      REPLAY_SMOKE_MATCH_ID / REPLAY_SMOKE_PUUID, same as `make
+#      smoke-replay`), run the full Replay R1 flow against the composed
+#      backend: load match detail into the fresh DB -> create -> local upload ->
 #      complete -> poll/refresh status until ready -> list artifacts/frames
 #      -> delete.
 #   4. After delete, refresh the replay status once more and confirm object
@@ -54,12 +55,35 @@ fi
 
 cd "$repo_dir"
 
+read_smoke_env_value() {
+  local name="$1"
+  local value="${!name:-}"
+  local line
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
+    return
+  fi
+  if [[ ! -f "$repo_dir/.env" ]]; then
+    return
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "${name}="* ]]; then
+      printf '%s' "${line#*=}"
+      return
+    fi
+  done < "$repo_dir/.env"
+}
+
 # Compose defaults leave REPLAY_ENABLED=false so the worker refuses to start.
 # For this E2E path we force a local, ephemeral replay stack. The token secret
 # is generated per run and never written to the repo; operators may override
 # via the environment when exercising a longer-lived stack.
 export REPLAY_ENABLED=true
 export REPLAY_STORAGE_BACKEND="${REPLAY_STORAGE_BACKEND:-local}"
+export REPLAY_SMOKE_PLATFORM="$(read_smoke_env_value REPLAY_SMOKE_PLATFORM)"
+export REPLAY_SMOKE_PLATFORM="${REPLAY_SMOKE_PLATFORM:-NA1}"
+export REPLAY_SMOKE_MATCH_ID="$(read_smoke_env_value REPLAY_SMOKE_MATCH_ID)"
+export REPLAY_SMOKE_PUUID="$(read_smoke_env_value REPLAY_SMOKE_PUUID)"
 # Settings require >= 32 bytes when replay is enabled.
 if [[ -z "${REPLAY_TOKEN_SECRET:-}" || ${#REPLAY_TOKEN_SECRET} -lt 32 ]]; then
   REPLAY_TOKEN_SECRET="e2e-$(openssl rand -hex 32 2>/dev/null || printf '0123456789abcdef0123456789abcdef')-not-for-prod"
@@ -131,11 +155,19 @@ log "running the full replay flow (create, upload, complete, refresh, frames, de
 PYTHONPATH="$repo_dir/backend" SMOKE_API_BASE_URL="$api_base_url" \
   "$repo_dir/backend/.venv/bin/python" "$repo_dir/scripts/smoke_replay.py"
 
-log "verifying object cleanup in the replay_data volume after delete"
+log "verifying zero replay objects in the replay_data volume after delete"
 remaining_objects="$(
   docker run --rm -v "$(basename "$repo_dir")_replay_data:/data" alpine:3 \
     sh -c 'find /data -type f 2>/dev/null | wc -l' || echo "unknown"
 )"
-log "replay_data volume now reports ${remaining_objects} file(s) (retention/cleanup jobs run on a timer, so a small residual count from other test data is expected)"
+if ! [[ "$remaining_objects" =~ ^[0-9]+$ ]]; then
+  log "FAILED: could not count replay_data volume objects"
+  exit 1
+fi
+if [[ "$remaining_objects" != "0" ]]; then
+  log "FAILED: replay_data volume still contains ${remaining_objects} file(s)"
+  exit 1
+fi
+log "replay_data volume contains zero files"
 
 log "PASSED: replay compose end-to-end flow completed"
