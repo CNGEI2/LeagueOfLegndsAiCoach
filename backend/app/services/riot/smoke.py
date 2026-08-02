@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Mapping
 from typing import Protocol
 from urllib.parse import quote
 
 _SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{1,79}$")
 _SAFE_REQUEST_ID = re.compile(r"^[0-9a-f]{32}$")
+_SAFE_STATUS = frozenset({"resolved", "confirmation_required"})
+_SAFE_PLATFORM = re.compile(r"^[A-Z0-9]{2,8}$")
 
 
 class SmokeResponse(Protocol):
@@ -19,6 +22,8 @@ class SmokeResponse(Protocol):
 
 class SmokeClient(Protocol):
     def get(self, url: str, *, params: Mapping[str, str | int]) -> SmokeResponse: ...
+
+    def post(self, url: str, *, json: Mapping[str, object]) -> SmokeResponse: ...
 
 
 class SmokeFailure(RuntimeError):
@@ -96,12 +101,123 @@ def run_smoke(
     print(f"Phase 2 Riot smoke passed: matches={len(matches)} locales=2 repeat=ok")
 
 
+def run_detection_smoke(
+    *,
+    client: SmokeClient,
+    api_base_url: str,
+    game_name: str,
+    tag_line: str,
+    locale: str = "en-US",
+) -> None:
+    """Detect platforms for a configured Riot ID without printing identifiers."""
+    base_url = api_base_url.rstrip("/")
+    riot_id = f"{game_name.strip()}#{tag_line.strip()}"
+    started = time.perf_counter()
+    first = _post_json(
+        client,
+        f"{base_url}/api/v1/players/detect",
+        {"riot_id": riot_id, "locale": locale},
+    )
+    second = _post_json(
+        client,
+        f"{base_url}/api/v1/players/detect",
+        {"riot_id": riot_id, "locale": locale},
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    first_summary = _detection_summary(first)
+    second_summary = _detection_summary(second)
+    if first_summary != second_summary:
+        raise SmokeFailure("SMOKE_DETECTION_MISMATCH")
+    request_id = _safe_request_id(first.get("request_id"))
+    request_part = f" request_id={request_id}" if request_id is not None else ""
+    print(
+        "Phase 2 detection smoke passed: "
+        f"status={first_summary['status']} candidates={first_summary['candidates']} "
+        f"elapsed_ms={elapsed_ms} repeat=ok{request_part}"
+    )
+
+
+def run_optional_ambiguous_detection_smoke(
+    *,
+    client: SmokeClient,
+    api_base_url: str,
+    ambiguous_riot_id: str,
+    locale: str = "en-US",
+) -> None:
+    """Optional multi-platform confirm path. Skips when the Riot ID is unset."""
+    trimmed = ambiguous_riot_id.strip()
+    if not trimmed:
+        print("Phase 2 ambiguous detection smoke skipped: RIOT_SMOKE_AMBIGUOUS_RIOT_ID unset")
+        return
+    base_url = api_base_url.rstrip("/")
+    detected = _post_json(
+        client,
+        f"{base_url}/api/v1/players/detect",
+        {"riot_id": trimmed, "locale": locale},
+    )
+    if detected.get("status") != "confirmation_required":
+        raise SmokeFailure("SMOKE_AMBIGUOUS_EXPECTED")
+    candidates = detected.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    first_candidate = candidates[0]
+    if not isinstance(first_candidate, Mapping):
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    platform = first_candidate.get("platform")
+    if not isinstance(platform, str) or _SAFE_PLATFORM.fullmatch(platform) is None:
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    detection_id = _required_string(detected, "detection_id")
+    confirmed = _post_json(
+        client,
+        f"{base_url}/api/v1/players/detect/{quote(detection_id, safe='')}/confirm",
+        {"platform": platform, "locale": locale},
+    )
+    if confirmed.get("status") != "resolved":
+        raise SmokeFailure("SMOKE_CONFIRM_FAILED")
+    print(f"Phase 2 ambiguous detection smoke passed: candidates={len(candidates)} confirm=ok")
+
+
+def _detection_summary(payload: Mapping[str, object]) -> dict[str, object]:
+    status = payload.get("status")
+    if status not in _SAFE_STATUS:
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    if status == "resolved":
+        player = _required_mapping(payload, "player")
+        platform = player.get("platform")
+        if not isinstance(platform, str) or _SAFE_PLATFORM.fullmatch(platform) is None:
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        return {"status": status, "candidates": 1, "platform": platform}
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    platforms: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        platform = candidate.get("platform")
+        if not isinstance(platform, str) or _SAFE_PLATFORM.fullmatch(platform) is None:
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        platforms.append(platform)
+    return {"status": status, "candidates": len(platforms), "platforms": tuple(sorted(platforms))}
+
+
 def _get_json(client: SmokeClient, url: str, params: Mapping[str, str | int]) -> dict[str, object]:
     try:
         response = client.get(url, params=params)
     except Exception:
         raise SmokeFailure("SMOKE_REQUEST_FAILED") from None
+    return _parse_success(response)
 
+
+def _post_json(client: SmokeClient, url: str, body: Mapping[str, object]) -> dict[str, object]:
+    try:
+        response = client.post(url, json=body)
+    except Exception:
+        raise SmokeFailure("SMOKE_REQUEST_FAILED") from None
+    return _parse_success(response)
+
+
+def _parse_success(response: SmokeResponse) -> dict[str, object]:
     try:
         response.raise_for_status()
     except Exception:
@@ -133,6 +249,12 @@ def _backend_failure(response: SmokeResponse) -> SmokeFailure:
     if isinstance(request_id, str) and _SAFE_REQUEST_ID.fullmatch(request_id) is not None:
         return SmokeFailure(code, request_id)
     return SmokeFailure(code)
+
+
+def _safe_request_id(value: object) -> str | None:
+    if isinstance(value, str) and _SAFE_REQUEST_ID.fullmatch(value) is not None:
+        return value
+    return None
 
 
 def _required_mapping(payload: Mapping[str, object], key: str) -> Mapping[str, object]:

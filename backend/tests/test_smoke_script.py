@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from app.services.riot.smoke import SmokeFailure, require_smoke_configuration, run_smoke
+from app.services.riot.smoke import (
+    SmokeFailure,
+    require_smoke_configuration,
+    run_detection_smoke,
+    run_optional_ambiguous_detection_smoke,
+    run_smoke,
+)
 
 
 @dataclass
@@ -24,10 +30,14 @@ class FakeResponse:
 @dataclass
 class FakeSmokeClient:
     responses: list[FakeResponse]
-    requests: list[tuple[str, dict[str, str | int]]] = field(default_factory=list)
+    requests: list[tuple[str, dict[str, object]]] = field(default_factory=list)
 
     def get(self, url: str, *, params: dict[str, str | int]) -> FakeResponse:
-        self.requests.append((url, params))
+        self.requests.append((url, dict(params)))
+        return self.responses.pop(0)
+
+    def post(self, url: str, *, json: dict[str, object]) -> FakeResponse:
+        self.requests.append((url, dict(json)))
         return self.responses.pop(0)
 
 
@@ -245,3 +255,70 @@ def test_smoke_redacts_failures_to_stable_code_and_request_id(
         "raw response body",
     ):
         assert sensitive_value not in rendered
+
+
+def test_detection_smoke_prints_safe_summary_without_identifiers(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeSmokeClient(
+        responses=[
+            FakeResponse(
+                {
+                    "status": "resolved",
+                    "player": {
+                        "puuid": "private-puuid",
+                        "game_name": "Secret Player",
+                        "tag_line": "1115",
+                        "platform": "EUW1",
+                    },
+                    "request_id": "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+                }
+            ),
+            FakeResponse(
+                {
+                    "status": "resolved",
+                    "player": {
+                        "puuid": "private-puuid",
+                        "game_name": "Secret Player",
+                        "tag_line": "1115",
+                        "platform": "EUW1",
+                    },
+                    "request_id": "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+                }
+            ),
+        ]
+    )
+
+    run_detection_smoke(
+        client=client,
+        api_base_url="http://localhost:8000",
+        game_name="Secret Player",
+        tag_line="1115",
+        locale="en-US",
+    )
+
+    output = capsys.readouterr().out
+    assert "status=resolved" in output
+    assert "candidates=1" in output
+    assert "repeat=ok" in output
+    for sensitive_value in (
+        "Secret Player",
+        "1115",
+        "private-puuid",
+        "Secret Player#1115",
+        "http://localhost:8000",
+    ):
+        assert sensitive_value not in output
+    assert all(request[0].endswith("/api/v1/players/detect") for request in client.requests)
+    assert all("platform" not in request[1] for request in client.requests)
+
+
+def test_optional_ambiguous_smoke_skips_when_unset(capsys: pytest.CaptureFixture[str]) -> None:
+    client = FakeSmokeClient(responses=[])
+    run_optional_ambiguous_detection_smoke(
+        client=client,
+        api_base_url="http://localhost:8000",
+        ambiguous_riot_id="",
+    )
+    assert "skipped" in capsys.readouterr().out
+    assert client.requests == []

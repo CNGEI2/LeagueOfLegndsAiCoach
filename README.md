@@ -10,11 +10,26 @@ LoL AI Coach is a bilingual League of Legends match-data browser. Phase 2 resolv
 
 ### Phase 2 status and boundary
 
-- Available: `NA1` Riot ID search, separate game name/tag line/platform inputs, canonical player profile, recent-match rail, and English/Chinese localized match details with ten participants for supported standard games.
-- The tag line is independent of platform. For example, a numeric tag such as `#1234` is valid and is not inferred from `NA1`.
+- Available: single-field Riot ID search with optional automatic platform detection (feature-flagged), the compatibility resolve route with explicit platform, canonical player profile, recent-match rail, and English/Chinese localized match details with ten participants for supported standard games.
+- Automatic detection covers Riot's sixteen League platforms from a closed routing catalog. Candidate server labels always come from the backend response.
+- The tag line is independent of platform. For example, a numeric tag such as `#1234` is valid and is not inferred from any platform code.
 - Queue `400` (Normal Draft) and `420` (Ranked Solo/Duo) are marked as data-supported. Other returned queues remain visible but do not offer a detail view when their team structure is unsupported.
 - Static data comes from a match-compatible Data Dragon version. `en-US` maps to `en_US`; `zh-CN` maps to `zh_CN`. If names or assets cannot be resolved, numeric data still appears with a localized degraded-data warning; the app never substitutes current-patch names silently.
 - Not in Phase 2 / Replay R1: Match Timeline, scores, coaching findings, AI calls, behavioral judgment, positioning, mechanics, awareness, intent, causality, OP.GG integration, or raw upstream JSON storage.
+
+### Platform detection rollout
+
+`RIOT_PLATFORM_DETECTION_ENABLED` defaults to `false`. Roll out in this order:
+
+1. Migrate the database to Alembic head (`0003_player_platform_detection` or later).
+2. Deploy the backend with `RIOT_PLATFORM_DETECTION_ENABLED=false` so routes exist but stay dark.
+3. Deploy the compatible frontend (single Riot ID field + detection client).
+4. Set `RIOT_ACCOUNT_PRIMARY_REGION` and the detection/confirmation TTLs.
+5. Enable detection with `RIOT_PLATFORM_DETECTION_ENABLED=true`.
+6. Monitor `riot_platform_detection_*` and `riot_platform_confirmation_total` metrics.
+7. To roll back, set the flag back to `false`. The compatibility `GET /api/v1/players/resolve` route remains available.
+
+Production API keys require normal rotation and must never be pasted into source files, fixtures, logs, or chat.
 
 ### Requirements
 
@@ -83,7 +98,7 @@ make smoke-replay
 - `make verify-replay` runs Replay unit/API/frontend tests only (`not integration and not replay_ffmpeg`). Frontend portion uses `pnpm test` for the replay Vitest files.
 - `make verify-replay-ffmpeg` requires real `ffmpeg`/`ffprobe` binaries and runs the marked media integration test.
 - `make verify-replay-postgres` requires `TEST_DATABASE_URL`, upgrades migrations, and runs PostgreSQL integration tests excluding the FFmpeg media suite.
-- `make smoke-riot` calls an already-running local backend. It also requires non-empty ignored `RIOT_SMOKE_GAME_NAME`, `RIOT_SMOKE_TAG_LINE`, and `RIOT_SMOKE_PLATFORM` settings plus `RIOT_API_KEY`. The command prints only generic counts on success; it never prints the Riot ID, PUUID, match ID, key, full URL, or raw response body.
+- `make smoke-riot` calls an already-running local backend. It also requires non-empty ignored `RIOT_SMOKE_GAME_NAME`, `RIOT_SMOKE_TAG_LINE`, and `RIOT_SMOKE_PLATFORM` settings plus `RIOT_API_KEY`. When `RIOT_PLATFORM_DETECTION_ENABLED=true` on both the smoke runner and the running API, it also posts `/api/v1/players/detect` twice and prints only safe detection fields (`status`, candidate count, elapsed time, request ID). Optional `RIOT_SMOKE_AMBIGUOUS_RIOT_ID` exercises confirm when set. The command never prints the Riot ID, PUUID, match ID, key, full URL, or raw response body.
 - `make smoke-replay` requires a running API + replay worker, FFmpeg, and ignored `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID`. It generates a 600s 320×180 lavfi fixture at runtime, exercises create/upload/complete/poll/artifacts/delete, and prints only a generic line such as `replay=ready artifacts=3 delete=ok`.
 
 CI runs non-integration backend checks, the PostgreSQL integration gate, and all frontend checks. It intentionally does not run a live Riot smoke flow because development keys and smoke identities are local secrets.
@@ -99,7 +114,11 @@ Observed acceptance on this workstation: automated unit/type/build checks and th
 | `TEST_DATABASE_URL` | Dedicated disposable PostgreSQL database for `make verify-postgres`. |
 | `RIOT_API_KEY` | Server-only Riot key; leave empty in `.env.example`. |
 | `RIOT_SMOKE_GAME_NAME` / `RIOT_SMOKE_TAG_LINE` | Ignored local smoke identity; never commit a real player identifier. |
-| `RIOT_SMOKE_PLATFORM` | Smoke platform; Phase 2 supports `NA1` only. |
+| `RIOT_SMOKE_PLATFORM` | Compatibility resolve smoke platform (closed catalog value). |
+| `RIOT_SMOKE_AMBIGUOUS_RIOT_ID` | Optional ignored Riot ID for multi-platform confirm smoke; leave empty to skip. |
+| `RIOT_PLATFORM_DETECTION_ENABLED` | Enables automatic platform detection APIs. Default `false`. |
+| `RIOT_PLATFORM_DETECTION_TTL_SECONDS` / `RIOT_PLATFORM_DETECTION_NOT_FOUND_TTL_SECONDS` / `RIOT_PLATFORM_CONFIRMATION_TTL_SECONDS` | Detection cache and confirmation TTLs. |
+| `RIOT_ACCOUNT_PRIMARY_REGION` | Primary Account-V1 region before stable regional fallback. |
 | `SMOKE_API_BASE_URL` | Already-running local backend base URL, default `http://localhost:8000`. |
 | `NEXT_PUBLIC_API_BASE_URL` | Browser-visible backend base URL; contains no secret. |
 | `REPLAY_ENABLED` | Enables Replay APIs/worker. Default `false`. |
@@ -116,7 +135,9 @@ Observed acceptance on this workstation: automated unit/type/build checks and th
 
 - `GET /health/live`: process liveness without database access.
 - `GET /health/ready`: database/configuration readiness without calling Riot.
-- `GET /api/v1/players/resolve`: resolves a valid `platform`, `game_name`, and `tag_line`.
+- `POST /api/v1/players/detect`: single-field Riot ID platform detection (`resolved` or `confirmation_required`). Returns `404 NOT_FOUND` while the feature flag is off.
+- `POST /api/v1/players/detect/{detection_id}/confirm`: confirms one returned candidate platform.
+- `GET /api/v1/players/resolve`: compatibility resolve for a valid `platform`, `game_name`, and `tag_line`.
 - `GET /api/v1/players/{puuid}/matches`: returns up to ten newest-to-oldest normalized matches.
 - `GET /api/v1/matches/{match_id}`: returns a localized supported match detail for the selected player.
 
@@ -160,11 +181,26 @@ LoL AI Coach 是一个中英双语的《英雄联盟》对局数据浏览工具�
 
 ### Phase 2 状态与边界
 
-- 已提供：`NA1` Riot ID 查询、独立的游戏名/标签/平台输入、规范玩家资料、近期对局列表，以及中英文标准对局详情（支持时展示十名参与者）。
-- 标签与平台相互独立。例如 `#1234` 这类数字标签有效，绝不会由 `NA1` 自动推断。
+- 已提供：单字段 Riot ID 查询与可选自动服务器识别（功能开关控制）、兼容期显式平台 resolve 路由、规范玩家资料、近期对局列表，以及中英文标准对局详情（支持时展示十名参与者）。
+- 自动识别覆盖 Riot 官方十六个英雄联盟平台，候选服务器名称以后端响应为准。
+- 标签与平台相互独立。例如 `#1234` 这类数字标签有效，绝不会由任何平台代码自动推断。
 - 队列 `400`（自选模式）和 `420`（单排/双排）标记为数据支持。其他返回队列仍会展示；若队伍结构不支持，则不会提供详情页。
 - 静态资料使用与对局版本兼容的 Data Dragon：`en-US` 映射到 `en_US`，`zh-CN` 映射到 `zh_CN`。若名称或资源无法解析，数值数据仍会展示并给出本地化降级提示；不会偷偷用当前版本名称替代。
 - Phase 2 / Replay R1 不包含：Match Timeline、评分、复盘结论、AI 调用、行为判断、走位、操作、意识、意图、因果推断、OP.GG 集成或原始上游 JSON 存储。
+
+### 自动识别上线顺序
+
+`RIOT_PLATFORM_DETECTION_ENABLED` 默认 `false`。按以下顺序上线：
+
+1. 将数据库迁移到 Alembic head（含 `0003_player_platform_detection`）。
+2. 先部署后端并保持 `RIOT_PLATFORM_DETECTION_ENABLED=false`。
+3. 部署兼容前端（单 Riot ID 输入与识别客户端）。
+4. 配置主区域与检测/确认 TTL。
+5. 将 `RIOT_PLATFORM_DETECTION_ENABLED=true` 开启识别。
+6. 监控 `riot_platform_detection_*` 与 `riot_platform_confirmation_total` 指标。
+7. 回滚时把开关设回 `false`；兼容 `GET /api/v1/players/resolve` 仍可用。
+
+生产 API Key 需按常规轮换，绝不能粘贴进源码、夹具、日志或聊天。
 
 ### 环境要求
 

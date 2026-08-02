@@ -6,7 +6,13 @@ import sys
 
 import httpx2
 from app.core.config import Settings
-from app.services.riot.smoke import SmokeFailure, require_smoke_configuration, run_smoke
+from app.services.riot.smoke import (
+    SmokeFailure,
+    require_smoke_configuration,
+    run_detection_smoke,
+    run_optional_ambiguous_detection_smoke,
+    run_smoke,
+)
 
 
 def main() -> int:
@@ -18,7 +24,7 @@ def main() -> int:
             platform=settings.riot_smoke_platform,
             riot_configured=settings.riot_configured,
         )
-        with httpx2.Client(timeout=10.0) as client:
+        with httpx2.Client(timeout=30.0) as client:
             run_smoke(
                 client=client,
                 api_base_url=settings.smoke_api_base_url,
@@ -26,6 +32,25 @@ def main() -> int:
                 tag_line=settings.riot_smoke_tag_line,
                 platform=settings.riot_smoke_platform,
             )
+            if settings.riot_platform_detection_enabled:
+                run_detection_smoke(
+                    client=client,
+                    api_base_url=settings.smoke_api_base_url,
+                    game_name=settings.riot_smoke_game_name,
+                    tag_line=settings.riot_smoke_tag_line,
+                    locale="en-US",
+                )
+                run_optional_ambiguous_detection_smoke(
+                    client=client,
+                    api_base_url=settings.smoke_api_base_url,
+                    ambiguous_riot_id=settings.riot_smoke_ambiguous_riot_id,
+                    locale="en-US",
+                )
+            else:
+                print(
+                    "Phase 2 detection smoke skipped: "
+                    "RIOT_PLATFORM_DETECTION_ENABLED=false"
+                )
     except SmokeFailure as error:
         print(error)
         return 1

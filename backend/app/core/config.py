@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     riot_smoke_game_name: str = ""
     riot_smoke_tag_line: str = ""
     riot_smoke_platform: str = "NA1"
+    riot_smoke_ambiguous_riot_id: str = ""
     smoke_api_base_url: str = "http://localhost:8000"
     replay_enabled: bool = False
     replay_storage_backend: Literal["local", "s3"] = "local"
