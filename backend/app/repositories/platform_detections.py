@@ -149,26 +149,26 @@ class SqlPlatformDetectionRepository:
             "created_at": normalized.fetched_at,
             "updated_at": normalized.fetched_at,
         }
-        statement = insert(PlatformDetectionRow).values(**values)
-        statement = statement.on_conflict_do_update(
+        insert_statement = insert(PlatformDetectionRow).values(**values)
+        upsert_statement = insert_statement.on_conflict_do_update(
             index_elements=[
                 PlatformDetectionRow.game_name_key,
                 PlatformDetectionRow.tag_line_key,
             ],
             set_={
-                "canonical_game_name": statement.excluded.canonical_game_name,
-                "canonical_tag_line": statement.excluded.canonical_tag_line,
-                "puuid": statement.excluded.puuid,
-                "result_status": statement.excluded.result_status,
-                "candidate_platforms": statement.excluded.candidate_platforms,
-                "fetched_at": statement.excluded.fetched_at,
-                "expires_at": statement.excluded.expires_at,
-                "confirmation_expires_at": statement.excluded.confirmation_expires_at,
-                "updated_at": statement.excluded.updated_at,
+                "canonical_game_name": insert_statement.excluded.canonical_game_name,
+                "canonical_tag_line": insert_statement.excluded.canonical_tag_line,
+                "puuid": insert_statement.excluded.puuid,
+                "result_status": insert_statement.excluded.result_status,
+                "candidate_platforms": insert_statement.excluded.candidate_platforms,
+                "fetched_at": insert_statement.excluded.fetched_at,
+                "expires_at": insert_statement.excluded.expires_at,
+                "confirmation_expires_at": insert_statement.excluded.confirmation_expires_at,
+                "updated_at": insert_statement.excluded.updated_at,
             },
         ).returning(PlatformDetectionRow)
         async with self._session_factory.begin() as session:
-            row = (await session.execute(statement)).scalar_one()
+            row = (await session.execute(upsert_statement)).scalar_one()
         return _to_record(row)
 
     async def delete(self, *, detection_id: UUID) -> None:

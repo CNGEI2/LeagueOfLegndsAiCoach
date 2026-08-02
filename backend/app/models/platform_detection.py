@@ -26,7 +26,7 @@ class PlatformDetectionRow(Base):
     canonical_tag_line: Mapped[str | None] = mapped_column(String(64), nullable=True)
     puuid: Mapped[str | None] = mapped_column(String(128), nullable=True)
     result_status: Mapped[str] = mapped_column(String(16))
-    candidate_platforms: Mapped[list[object]] = mapped_column(JSONB)
+    candidate_platforms: Mapped[list[str]] = mapped_column(JSONB)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     confirmation_expires_at: Mapped[datetime | None] = mapped_column(
