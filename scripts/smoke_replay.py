@@ -250,12 +250,17 @@ def _poll_deleted(
 ) -> dict[str, object]:
     deadline = time.monotonic() + poll_timeout_seconds
     while True:
-        payload = _request_json(
+        response = _request(
             client,
             "GET",
             f"{api_base_url.rstrip('/')}/api/v1/replays/{replay_id}",
             headers={"Authorization": f"Bearer {access_token}"},
+            expect_json=True,
+            accepted_error_codes=frozenset({"REPLAY_NOT_FOUND"}),
         )
+        if response.status_code == 404:
+            return {"status": "deleted"}
+        payload = _response_mapping(response)
         status = payload.get("status")
         if status == "deleted":
             return payload
@@ -285,6 +290,10 @@ def _request_json(
         json=json,
         expect_json=True,
     )
+    return _response_mapping(response)
+
+
+def _response_mapping(response: SmokeResponse) -> dict[str, object]:
     try:
         payload = response.json()
     except Exception:
@@ -303,6 +312,7 @@ def _request(
     content: object | None = None,
     json: object | None = None,
     expect_json: bool,
+    accepted_error_codes: frozenset[str] = frozenset(),
 ) -> SmokeResponse:
     try:
         response = client.request(
@@ -316,10 +326,12 @@ def _request(
         raise SmokeFailure("SMOKE_REQUEST_FAILED") from None
 
     try:
-        if expect_json or response.status_code >= 400:
+        if response.status_code >= 400:
+            if _safe_error_code(response) in accepted_error_codes:
+                return response
             response.raise_for_status()
-        elif response.status_code >= 400:
-            raise SmokeFailure("SMOKE_REQUEST_FAILED")
+        elif expect_json:
+            response.raise_for_status()
     except SmokeFailure:
         raise
     except Exception:

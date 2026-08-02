@@ -29,13 +29,18 @@ class FakeResponse:
     payload: object
     status_code: int = 200
     raise_error: Exception | None = None
+    json_error: Exception | None = None
     content: bytes = b""
 
     def raise_for_status(self) -> None:
         if self.raise_error is not None:
             raise self.raise_error
+        if self.status_code >= 400:
+            raise RuntimeError("request failed")
 
     def json(self) -> object:
+        if self.json_error is not None:
+            raise self.json_error
         return self.payload
 
 
@@ -210,11 +215,9 @@ def test_smoke_reports_generic_ready_counts_without_secrets(
                 ),
                 FakeResponse(
                     {
-                        "replay_id": replay_id,
-                        "status": "deleted",
-                        "processing_stage": None,
-                        "progress_percent": 0,
-                    }
+                        "error": {"code": "REPLAY_NOT_FOUND"},
+                    },
+                    status_code=404,
                 ),
             ],
             "DELETE": [
@@ -293,7 +296,10 @@ def test_smoke_seeds_configured_platform_match_then_waits_for_async_delete(
                 FakeResponse({"match_id": match_id, "platform": platform}),
                 FakeResponse({"replay_id": replay_id, "status": "ready"}),
                 FakeResponse({"artifacts": []}),
-                FakeResponse({"replay_id": replay_id, "status": "deleted"}),
+                FakeResponse(
+                    {"error": {"code": "REPLAY_NOT_FOUND"}},
+                    status_code=404,
+                ),
             ],
             "POST": [
                 FakeResponse(
@@ -338,3 +344,70 @@ def test_smoke_seeds_configured_platform_match_then_waits_for_async_delete(
     )
     assert client.requests[delete_index + 1][0] == "GET"
     assert capsys.readouterr().out == "replay=ready artifacts=0 delete=ok\n"
+
+
+def test_poll_deleted_rejects_other_structured_404_codes() -> None:
+    smoke = _load_smoke_module()
+    client = FakeSmokeClient(
+        responses={
+            "GET": [
+                FakeResponse(
+                    {"error": {"code": "MATCH_NOT_FOUND"}},
+                    status_code=404,
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(smoke.SmokeFailure) as raised:
+        smoke._poll_deleted(
+            client,
+            api_base_url="http://example.test",
+            replay_id=str(uuid4()),
+            access_token="smoke-access-token",
+            poll_interval_seconds=0,
+            poll_timeout_seconds=1,
+        )
+
+    assert raised.value.code == "MATCH_NOT_FOUND"
+
+
+def test_poll_deleted_rejects_non_json_404_as_generic_request_failure() -> None:
+    smoke = _load_smoke_module()
+    client = FakeSmokeClient(
+        responses={
+            "GET": [
+                FakeResponse(
+                    None,
+                    status_code=404,
+                    json_error=ValueError("invalid JSON"),
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(smoke.SmokeFailure) as raised:
+        smoke._poll_deleted(
+            client,
+            api_base_url="http://example.test",
+            replay_id=str(uuid4()),
+            access_token="smoke-access-token",
+            poll_interval_seconds=0,
+            poll_timeout_seconds=1,
+        )
+
+    assert raised.value.code == "SMOKE_REQUEST_FAILED"
+
+
+def test_poll_deleted_accepts_readable_deleted_status() -> None:
+    smoke = _load_smoke_module()
+    client = FakeSmokeClient(responses={"GET": [FakeResponse({"status": "deleted"})]})
+
+    assert smoke._poll_deleted(
+        client,
+        api_base_url="http://example.test",
+        replay_id=str(uuid4()),
+        access_token="smoke-access-token",
+        poll_interval_seconds=0,
+        poll_timeout_seconds=1,
+    ) == {"status": "deleted"}
