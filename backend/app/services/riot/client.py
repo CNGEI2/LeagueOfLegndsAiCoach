@@ -8,7 +8,7 @@ import httpx2
 
 from app.core.errors import ApiError
 from app.core.logging import log_safe_operation
-from app.core.routing import ROUTES
+from app.core.routing import REGIONAL_HOSTS, ROUTES
 
 STATUS_MAPPING: dict[int, tuple[int, str, bool]] = {
     400: (502, "RIOT_REQUEST_INVALID", False),
@@ -31,8 +31,8 @@ _ERROR_STATUS_CODES = {
     "RIOT_UNAVAILABLE": (503, True),
     "RIOT_INVALID_RESPONSE": (502, False),
 }
-_APPROVED_HOSTS = frozenset(
-    host for route in ROUTES.values() for host in (route.regional_host, route.platform_host)
+_APPROVED_HOSTS = frozenset(REGIONAL_HOSTS.values()) | frozenset(
+    route.platform_host for route in ROUTES.values()
 )
 
 

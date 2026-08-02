@@ -5,6 +5,7 @@ import httpx2
 import pytest
 
 from app.core.errors import ApiError
+from app.core.routing import REGIONAL_HOSTS, ROUTES
 from app.services.riot.client import RiotHttpClient
 
 
@@ -29,6 +30,39 @@ async def test_riot_client_sends_server_only_token() -> None:
 
     assert body == {"puuid": "p"}
     assert seen_header == "RGAPI-fake"
+
+
+@pytest.mark.asyncio
+async def test_riot_client_allows_only_hosts_in_the_closed_routing_catalog() -> None:
+    """An arbitrary hostname must be rejected before it can receive the Riot token."""
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requested_hosts.append(request.url.host)
+        return httpx2.Response(200, json={"ok": True})
+
+    catalog_hosts = set(REGIONAL_HOSTS.values()) | {
+        route.platform_host for route in ROUTES.values()
+    }
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as transport_client:
+        client = RiotHttpClient(api_key="RGAPI-fake", client=transport_client)
+        for host in catalog_hosts:
+            assert await client.get_json(
+                host=host,
+                path="/test",
+                params=None,
+                not_found_code="PLAYER_NOT_FOUND",
+            ) == {"ok": True}
+        with pytest.raises(ApiError) as caught:
+            await client.get_json(
+                host="untrusted.api.riotgames.com",
+                path="/test",
+                params=None,
+                not_found_code="PLAYER_NOT_FOUND",
+            )
+
+    assert set(requested_hosts) == catalog_hosts
+    assert caught.value.code == "RIOT_REQUEST_INVALID"
 
 
 @pytest.mark.asyncio

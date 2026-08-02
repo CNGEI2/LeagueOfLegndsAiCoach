@@ -1,6 +1,6 @@
 from urllib.parse import quote
 
-from app.core.routing import Platform, routes_for
+from app.core.routing import Platform, Region, regional_host_for, routes_for
 from app.services.riot.client import RiotHttpClient
 from app.services.riot.dto import (
     AccountDto,
@@ -28,7 +28,16 @@ class RiotGateway:
     async def get_account_by_riot_id(
         self, *, platform: Platform, game_name: str, tag_line: str
     ) -> AccountDto:
-        host = routes_for(platform).regional_host
+        return await self.get_account_by_riot_id_in_region(
+            region=routes_for(platform).region,
+            game_name=game_name,
+            tag_line=tag_line,
+        )
+
+    async def get_account_by_riot_id_in_region(
+        self, *, region: Region, game_name: str, tag_line: str
+    ) -> AccountDto:
+        host = regional_host_for(region)
         path = (
             "/riot/account/v1/accounts/by-riot-id/"
             f"{quote(game_name, safe='')}/{quote(tag_line, safe='')}"

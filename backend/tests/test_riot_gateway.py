@@ -1,8 +1,10 @@
+import asyncio
+
 import httpx2
 import pytest
 
 from app.core.errors import ApiError
-from app.core.routing import Platform
+from app.core.routing import Platform, Region
 from app.services.riot.client import RiotHttpClient
 from app.services.riot.gateway import RiotGateway
 from tests.fixtures.riot_payloads import MATCH_PAYLOAD
@@ -54,6 +56,99 @@ async def test_gateway_uses_independent_tag_line_and_regional_account_route() ->
     assert account.tag_line == "1115"
     assert seen_url.startswith("https://americas.api.riotgames.com/")
     assert "Player%20Name/1115" in seen_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("region", "expected_host"),
+    [
+        (Region.AMERICAS, "americas.api.riotgames.com"),
+        (Region.ASIA, "asia.api.riotgames.com"),
+        (Region.EUROPE, "europe.api.riotgames.com"),
+        (Region.SEA, "sea.api.riotgames.com"),
+    ],
+)
+async def test_gateway_gets_riot_id_from_selected_region_with_encoded_path(
+    region: Region, expected_host: str
+) -> None:
+    """Changing the regional route or losing percent encoding misaddresses Account-V1."""
+    seen_url = ""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal seen_url
+        seen_url = str(request.url)
+        return httpx2.Response(
+            200,
+            json={"puuid": "puuid-1", "gameName": "Game /#", "tagLine": "Tag #"},
+        )
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
+        account = await RiotGateway(
+            RiotHttpClient(api_key="RGAPI-fake", client=raw_client)
+        ).get_account_by_riot_id_in_region(
+            region=region,
+            game_name="Game /#",
+            tag_line="Tag #",
+        )
+
+    assert account.puuid == "puuid-1"
+    assert seen_url.startswith(f"https://{expected_host}/")
+    assert "/by-riot-id/Game%20%2F%23/Tag%20%23" in seen_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [
+        (404, "PLAYER_NOT_FOUND"),
+        (401, "RIOT_AUTH_FAILED"),
+        (429, "RIOT_RATE_LIMITED"),
+        (503, "RIOT_UNAVAILABLE"),
+    ],
+)
+async def test_gateway_region_account_lookup_propagates_safe_upstream_errors(
+    status_code: int, expected_code: str
+) -> None:
+    """Regional lookup must retain Account-V1's not-found and transient error contract."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(status_code, json={})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
+        with pytest.raises(ApiError) as caught:
+            await RiotGateway(
+                RiotHttpClient(
+                    api_key="RGAPI-fake",
+                    client=raw_client,
+                    sleep=lambda _: asyncio.sleep(0),
+                )
+            ).get_account_by_riot_id_in_region(
+                region=Region.EUROPE,
+                game_name="Player",
+                tag_line="EUW",
+            )
+
+    assert caught.value.code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_gateway_region_account_lookup_rejects_invalid_account_payload() -> None:
+    """A malformed Account-V1 result must not become a platform-detection identity."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"puuid": "puuid-1", "gameName": "Player"})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
+        with pytest.raises(ApiError) as caught:
+            await RiotGateway(
+                RiotHttpClient(api_key="RGAPI-fake", client=raw_client)
+            ).get_account_by_riot_id_in_region(
+                region=Region.ASIA,
+                game_name="Player",
+                tag_line="KR",
+            )
+
+    assert caught.value.code == "RIOT_INVALID_RESPONSE"
 
 
 @pytest.mark.asyncio
