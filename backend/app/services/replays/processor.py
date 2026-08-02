@@ -90,11 +90,9 @@ class ReplayProcessor:
             with tempfile.TemporaryDirectory(prefix="replay-job-") as scratch:
                 await self._process_in_scratch(job, Path(scratch), now=now)
         except ReplayProcessingCancelled:
-            await self._jobs.cancel(job.id, now=self._clock())
-            job.status = ReplayJobStatus.CANCELLED.value
-            # DELETE_ALL may already have finished; still sweep derived outputs
-            # idempotently so a late PROCESS upload cannot leave residue.
-            await self._sweep_cancelled_derived(job.replay_id)
+            # Sweep first. Only mark CANCELLED after cleanup succeeds so a
+            # failed sweep can reuse the normal PROCESS retry path.
+            await self._complete_cancelled_process(job)
         except Exception as error:
             await self._handle_process_failure(job, error)
         else:
@@ -508,37 +506,43 @@ class ReplayProcessor:
         )
         try:
             row = await self._replays.get(job.replay_id)
-            if row is not None and ReplayStatus(row.status) != ReplayStatus.DELETING:
-                await self._replays.transition(
-                    replay_id=row.id,
-                    expected_statuses={
-                        ReplayStatus.QUEUED,
-                        ReplayStatus.PROBING,
-                        ReplayStatus.TRANSCODING,
-                        ReplayStatus.EXTRACTING,
-                        ReplayStatus.FAILED,
-                    },
-                    expected_version=row.version,
-                    status=replay_status,
-                    values={
-                        "processing_stage": "queued"
-                        if replay_status == ReplayStatus.QUEUED
-                        else "failed",
-                        "error_code": code,
-                        "error_retryable": retryable,
-                        "processing_finished_at": None
-                        if replay_status == ReplayStatus.QUEUED
-                        else now,
-                        "source_delete_after": now
-                        + timedelta(hours=self._settings.replay_source_retention_hours),
-                        "updated_at": now,
-                    },
-                )
+            if row is None:
+                self._metrics.replay_processing_failures_total.inc(error_code=code)
+                return
+            current = ReplayStatus(row.status)
+            # Never pull a delete-won replay back to queued/failed.
+            if current in _PROCESS_CANCEL_STATUSES:
+                self._metrics.replay_processing_failures_total.inc(error_code=code)
+                return
+            await self._replays.transition(
+                replay_id=row.id,
+                expected_statuses={
+                    ReplayStatus.QUEUED,
+                    ReplayStatus.PROBING,
+                    ReplayStatus.TRANSCODING,
+                    ReplayStatus.EXTRACTING,
+                    ReplayStatus.FAILED,
+                },
+                expected_version=row.version,
+                status=replay_status,
+                values={
+                    "processing_stage": "queued"
+                    if replay_status == ReplayStatus.QUEUED
+                    else "failed",
+                    "error_code": code,
+                    "error_retryable": retryable,
+                    "processing_finished_at": None if replay_status == ReplayStatus.QUEUED else now,
+                    "source_delete_after": now
+                    + timedelta(hours=self._settings.replay_source_retention_hours),
+                    "updated_at": now,
+                },
+            )
         except ReplayStateConflict:
             latest = await self._replays.get(job.replay_id)
-            if latest is not None and ReplayStatus(latest.status) == ReplayStatus.DELETING:
-                await self._jobs.cancel(job.id, now=now)
-                job.status = ReplayJobStatus.CANCELLED.value
+            if latest is not None and ReplayStatus(latest.status) in _PROCESS_CANCEL_STATUSES:
+                # Delete won while failure was settling. Keep the failure/retry
+                # already recorded above; a later PROCESS attempt will sweep.
+                self._metrics.replay_processing_failures_total.inc(error_code=code)
                 return
 
         self._metrics.replay_processing_failures_total.inc(error_code=code)
@@ -608,6 +612,19 @@ class ReplayProcessor:
             await self._delete_missing_ok(key)
             raise
         return stored
+
+    async def _complete_cancelled_process(self, job: ReplayJobRow) -> None:
+        try:
+            await self._sweep_cancelled_derived(job.replay_id)
+        except Exception as error:
+            await self._handle_cancelled_cleanup_failure(job, error)
+            return
+        await self._jobs.cancel(job.id, now=self._clock())
+        job.status = ReplayJobStatus.CANCELLED.value
+
+    async def _handle_cancelled_cleanup_failure(self, job: ReplayJobRow, error: Exception) -> None:
+        """Retry cleanup via PROCESS failure semantics without mutating DELETED."""
+        await self._handle_process_failure(job, error)
 
     async def _sweep_cancelled_derived(self, replay_id: UUID) -> None:
         """Idempotent cleanup of PROCESS outputs after cancellation."""

@@ -244,6 +244,7 @@ class FakeReplayJobRepository:
 class FakeReplayArtifactRepository:
     rows: list[ReplayArtifactRow] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
+    fail_delete_rows_times: int = 0
 
     async def upsert(self, row: ReplayArtifactRow) -> ReplayArtifactRow:
         for existing in self.rows:
@@ -265,6 +266,10 @@ class FakeReplayArtifactRepository:
         return [row for row in self.rows if row.replay_id == replay_id]
 
     async def delete_rows(self, replay_id: UUID) -> int:
+        if self.fail_delete_rows_times > 0:
+            self.fail_delete_rows_times -= 1
+            self.events.append("artifact_rows_delete_failed")
+            raise TimeoutError("artifact delete temporarily unavailable")
         before = len(self.rows)
         self.rows = [row for row in self.rows if row.replay_id != replay_id]
         self.events.append("artifact_rows_deleted")
@@ -276,6 +281,7 @@ class FakeReplayStorage:
     objects: dict[str, bytes] = field(default_factory=dict)
     events: list[str] = field(default_factory=list)
     fail_upload_times: int = 0
+    fail_delete_prefix_times: int = 0
     uploads: int = 0
 
     async def create_upload_target(self, *args: object, **kwargs: object) -> object:
@@ -344,6 +350,10 @@ class FakeReplayStorage:
         raise AssertionError("promote unexpected")
 
     async def delete_prefix(self, prefix: str) -> None:
+        if self.fail_delete_prefix_times > 0:
+            self.fail_delete_prefix_times -= 1
+            self.events.append(f"delete_prefix_failed:{prefix}")
+            raise TimeoutError("storage delete_prefix temporarily unavailable")
         self.events.append(f"delete_prefix:{prefix}")
         removed = [key for key in self.objects if key == prefix or key.startswith(f"{prefix}/")]
         for key in removed:
@@ -925,6 +935,165 @@ async def test_process_upload_races_completed_delete_all_ends_deleted_with_zero_
     assert artifact_repo.rows == []
     assert f"delete_prefix:normalized/{replay.id}" in events
     assert f"delete_prefix:frames/{replay.id}" in events
+
+
+@pytest.mark.asyncio
+async def test_cancel_cleanup_delete_prefix_failure_retries_then_cancels() -> None:
+    """Cleanup failure must retry the PROCESS job without mutating DELETED."""
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    events: list[str] = []
+    orphan_key = f"normalized/{replay.id}/video"
+
+    class DeletedDuringUpload(FakeReplayStorage):
+        async def upload_from_path(self, key: str, source: Path) -> StoredObject:
+            stored = await super().upload_from_path(key, source)
+            if "normalized/" in key:
+                await replay_repo.scrub_deleted(replay.id, now=NOW)
+            return stored
+
+    store = DeletedDuringUpload(
+        objects={
+            replay.source_object_key or "": SOURCE_BYTES,
+            orphan_key: NORMALIZED_BYTES,
+        },
+        events=events,
+        fail_delete_prefix_times=1,
+    )
+    artifact_repo = FakeReplayArtifactRepository(
+        rows=[
+            ReplayArtifactRow(
+                id=uuid4(),
+                replay_id=replay.id,
+                kind=ReplayArtifactKind.ANCHOR_FRAME.value,
+                game_time_ms=0,
+                video_time_ms=0,
+                object_key=f"frames/{replay.id}/anchor",
+                sha256="b" * 64,
+                media_type="image/jpeg",
+                size_bytes=1,
+                width=1280,
+                height=720,
+                created_at=NOW,
+                delete_after=None,
+            )
+        ],
+        events=events,
+    )
+    processor, replay_repo, job_repo, _, _, _, _ = _processor(
+        replay=replay, events=events, storage=store, artifacts=artifact_repo
+    )
+    job = _job(replay.id)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.RETRY_SCHEDULED.value
+    assert "job_cancelled" not in events
+    assert any(item.startswith("job_retry:") for item in events)
+    assert any(item.startswith("delete_prefix_failed:") for item in events)
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert len(artifact_repo.rows) == 1
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.CANCELLED.value
+    assert "job_cancelled" in events
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert not any(key.startswith("normalized/") for key in store.objects)
+    assert not any(key.startswith(f"frames/{replay.id}") for key in store.objects)
+    assert artifact_repo.rows == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_cleanup_artifact_rows_failure_retries_then_cancels() -> None:
+    """Artifact-row cleanup failure retries PROCESS and leaves DELETED intact."""
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    events: list[str] = []
+    orphan_key = f"normalized/{replay.id}/video"
+
+    class DeletedDuringUpload(FakeReplayStorage):
+        async def upload_from_path(self, key: str, source: Path) -> StoredObject:
+            stored = await super().upload_from_path(key, source)
+            if "normalized/" in key:
+                await replay_repo.scrub_deleted(replay.id, now=NOW)
+            return stored
+
+    store = DeletedDuringUpload(
+        objects={
+            replay.source_object_key or "": SOURCE_BYTES,
+            orphan_key: NORMALIZED_BYTES,
+        },
+        events=events,
+    )
+    artifact_repo = FakeReplayArtifactRepository(
+        rows=[
+            ReplayArtifactRow(
+                id=uuid4(),
+                replay_id=replay.id,
+                kind=ReplayArtifactKind.VERIFICATION_FRAME.value,
+                game_time_ms=30_000,
+                video_time_ms=30_000,
+                object_key=f"frames/{replay.id}/frame-30000",
+                sha256="c" * 64,
+                media_type="image/jpeg",
+                size_bytes=1,
+                width=1280,
+                height=720,
+                created_at=NOW,
+                delete_after=None,
+            )
+        ],
+        events=events,
+        fail_delete_rows_times=1,
+    )
+    processor, replay_repo, job_repo, _, _, _, _ = _processor(
+        replay=replay, events=events, storage=store, artifacts=artifact_repo
+    )
+    job = _job(replay.id)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.RETRY_SCHEDULED.value
+    assert "job_cancelled" not in events
+    assert "artifact_rows_delete_failed" in events
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert len(artifact_repo.rows) == 1
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.CANCELLED.value
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert not any(key.startswith("normalized/") for key in store.objects)
+    assert artifact_repo.rows == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_cleanup_failure_does_not_raise_out_of_process() -> None:
+    """Worker consumer must keep running when cancellation cleanup fails."""
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    events: list[str] = []
+
+    class DeletedDuringUpload(FakeReplayStorage):
+        async def upload_from_path(self, key: str, source: Path) -> StoredObject:
+            stored = await super().upload_from_path(key, source)
+            if "normalized/" in key:
+                await replay_repo.scrub_deleted(replay.id, now=NOW)
+            return stored
+
+    store = DeletedDuringUpload(
+        objects={replay.source_object_key or "": SOURCE_BYTES},
+        events=events,
+        fail_delete_prefix_times=1,
+    )
+    processor, replay_repo, job_repo, _, _, _, _ = _processor(
+        replay=replay, events=events, storage=store
+    )
+    job = _job(replay.id)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)  # must not raise
+    assert job.status == ReplayJobStatus.RETRY_SCHEDULED.value
 
 
 @pytest.mark.asyncio
