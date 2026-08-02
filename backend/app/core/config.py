@@ -3,7 +3,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.routing import Region
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     riot_platform_detection_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
     riot_platform_detection_not_found_ttl_seconds: int = Field(default=300, ge=30, le=3600)
     riot_platform_confirmation_ttl_seconds: int = Field(default=900, ge=60, le=3600)
-    riot_account_primary_region: str = "AMERICAS"
+    riot_account_primary_region: Region = Region.AMERICAS
     player_cache_ttl_seconds: int = 900
     recent_matches_cache_ttl_seconds: int = 120
     match_retention_days: int = 30
@@ -81,17 +81,6 @@ class Settings(BaseSettings):
     @property
     def riot_configured(self) -> bool:
         return bool(self.riot_api_key.get_secret_value())
-
-    @field_validator("riot_account_primary_region")
-    @classmethod
-    def validate_riot_account_primary_region(cls, value: str) -> str:
-        try:
-            return Region(value).value
-        except ValueError as exc:
-            raise ValueError(
-                "RIOT_ACCOUNT_PRIMARY_REGION must be one of "
-                f"{', '.join(region.value for region in Region)}"
-            ) from exc
 
     @model_validator(mode="after")
     def validate_replay_settings(self) -> Self:

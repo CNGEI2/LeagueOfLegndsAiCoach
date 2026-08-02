@@ -48,15 +48,26 @@ def test_e2e_compose_smoke_requires_platform_and_zero_remaining_replay_objects()
     assert "read_smoke_env_value" in contents
     assert "/.env" in contents
     assert "docker compose down -v" in contents
+    assert "resolve_replay_data_volume" in contents
+    assert "docker inspect" in contents
+    assert "/var/lib/lol-ai-coach/replays" in contents
+    assert "export REPLAY_STORAGE_BACKEND=local" in contents
+    assert 'basename "$repo_dir"_replay_data' not in contents
     assert "remaining_objects" in contents
     assert '[[ "$remaining_objects" != "0" ]]' in contents
     assert "FAILED: replay_data volume still contains" in contents
 
 
-def test_e2e_compose_script_notes_when_docker_is_unavailable() -> None:
-    contents = E2E_SCRIPT.read_text(encoding="utf-8").lower()
-    assert "docker" in contents
-    assert "not executed" in contents or "skip" in contents or "unavailable" in contents
+def test_e2e_compose_fails_when_docker_or_smoke_identity_is_unavailable() -> None:
+    contents = E2E_SCRIPT.read_text(encoding="utf-8")
+    assert 'log "FAILED: docker is not available' in contents
+    assert "log \"FAILED: 'docker compose' is not available" in contents
+    assert 'log "FAILED: the Docker daemon is unreachable' in contents
+    assert "FAILED: REPLAY_SMOKE_MATCH_ID / REPLAY_SMOKE_PUUID are required" in contents
+    assert "SKIPPED:" not in contents
+    # Hard gate: unavailable docker / missing smoke identity must exit non-zero.
+    assert contents.count("exit 1") >= 4
+    assert "exit 0" not in contents
 
 
 def test_makefile_defines_e2e_replay_compose_target_that_runs_the_script() -> None:

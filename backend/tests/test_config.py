@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import ROOT_ENV_FILE, Settings
+from app.core.routing import Region
 
 
 def test_settings_have_safe_local_defaults() -> None:
@@ -111,7 +112,8 @@ def test_platform_detection_settings_have_safe_defaults() -> None:
     assert settings.riot_platform_detection_ttl_seconds == 86400
     assert settings.riot_platform_detection_not_found_ttl_seconds == 300
     assert settings.riot_platform_confirmation_ttl_seconds == 900
-    assert settings.riot_account_primary_region == "AMERICAS"
+    assert settings.riot_account_primary_region is Region.AMERICAS
+    assert isinstance(settings.riot_account_primary_region, Region)
     assert settings.riot_max_concurrency == 4
 
 
@@ -144,7 +146,10 @@ def test_riot_account_primary_region_must_be_a_known_region() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, riot_account_primary_region="ATLANTIS")
     settings = Settings(_env_file=None, riot_account_primary_region="EUROPE")
-    assert settings.riot_account_primary_region == "EUROPE"
+    assert settings.riot_account_primary_region is Region.EUROPE
+    assert isinstance(settings.riot_account_primary_region, Region)
+    settings = Settings(_env_file=None, riot_account_primary_region=Region.ASIA)
+    assert settings.riot_account_primary_region is Region.ASIA
 
 
 def test_riot_max_concurrency_is_bounded_as_shared_probe_limit() -> None:

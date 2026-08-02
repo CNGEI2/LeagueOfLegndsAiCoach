@@ -377,9 +377,9 @@ class ReplayProcessor:
         await self._ensure_not_deleting(row)
 
         duration_ms = int(normalized_validated.duration_seconds * 1000)
-        extractable_end_ms = max(
-            0,
-            duration_ms - row.game_time_zero_ms - _FRAME_SEEK_SAFE_MARGIN_MS,
+        extractable_end_ms = extractable_frame_end_ms(
+            duration_ms=duration_ms,
+            game_time_zero_ms=row.game_time_zero_ms,
         )
         frame_times = plan_frame_game_times(
             coverage.end_ms,
@@ -604,6 +604,19 @@ class ReplayProcessor:
             return
         lag_seconds = max(0.0, (now - deadline).total_seconds())
         self._metrics.replay_cleanup_lag_seconds.observe(lag_seconds, kind=kind)
+
+
+def extractable_frame_end_ms(*, duration_ms: int, game_time_zero_ms: int) -> int:
+    """Return the last game-time that is safe to seek, or reject short anchors."""
+    if duration_ms < 0 or game_time_zero_ms < 0:
+        raise ValueError("time values must be non-negative")
+    remaining_ms = duration_ms - game_time_zero_ms
+    if remaining_ms < _FRAME_SEEK_SAFE_MARGIN_MS:
+        raise ReplayMediaError(
+            "REPLAY_MEDIA_UNSUPPORTED",
+            "Replay anchor is too close to the media end for safe frame extraction.",
+        )
+    return remaining_ms - _FRAME_SEEK_SAFE_MARGIN_MS
 
 
 def plan_frame_game_times(

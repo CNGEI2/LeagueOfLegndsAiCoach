@@ -556,6 +556,64 @@ def test_frame_plan_stays_inside_extractable_window() -> None:
     assert coverage_end_ms not in times
 
 
+@pytest.mark.parametrize("remaining_ms", [0, 1, 99])
+def test_extractable_frame_end_rejects_anchors_within_safe_margin(
+    remaining_ms: int,
+) -> None:
+    from app.services.replays.media import ReplayMediaError
+    from app.services.replays.processor import extractable_frame_end_ms
+
+    duration_ms = 1_800_000
+    with pytest.raises(ReplayMediaError) as exc_info:
+        extractable_frame_end_ms(
+            duration_ms=duration_ms,
+            game_time_zero_ms=duration_ms - remaining_ms,
+        )
+    assert exc_info.value.code == "REPLAY_MEDIA_UNSUPPORTED"
+
+
+def test_extractable_frame_end_allows_exact_safe_margin_boundary() -> None:
+    from app.services.replays.processor import extractable_frame_end_ms
+
+    duration_ms = 1_800_000
+    assert (
+        extractable_frame_end_ms(
+            duration_ms=duration_ms,
+            game_time_zero_ms=duration_ms - 100,
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remaining_ms", [1, 99])
+async def test_process_rejects_short_anchor_without_extracting_frames(
+    remaining_ms: int,
+) -> None:
+    duration_ms = 1_800_000
+    replay = _replay(
+        match_duration_ms=duration_ms,
+        game_time_zero_ms=duration_ms - remaining_ms,
+    )
+    events: list[str] = []
+    media = FakeMediaRunner(
+        events=events,
+        source_probe=_probe(duration_seconds=1800.0),
+        normalized_probe=_probe(duration_seconds=1800.0),
+    )
+    processor, replay_repo, job_repo, _, _, media_runner, _ = _processor(
+        replay=replay, events=events, media=media
+    )
+    job = _job(replay.id)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)
+
+    assert media_runner.extract_calls == 0
+    assert replay_repo.rows[replay.id].status == ReplayStatus.FAILED.value
+    assert replay_repo.rows[replay.id].error_code == "REPLAY_MEDIA_UNSUPPORTED"
+
+
 @pytest.mark.asyncio
 async def test_idempotent_restart_skips_transcode_and_reuses_frames() -> None:
     replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)

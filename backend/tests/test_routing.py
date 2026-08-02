@@ -1,6 +1,10 @@
+from types import MappingProxyType
+
 import pytest
 
 from app.core.routing import (
+    REGIONAL_HOSTS,
+    ROUTES,
     Platform,
     Region,
     display_name_for,
@@ -48,7 +52,7 @@ CATALOG = {
     "VN2": (160, "SEA", "vn2.api.riotgames.com", "越南服", "Vietnam"),
 }
 
-REGIONAL_HOSTS = {
+EXPECTED_REGIONAL_HOSTS = {
     "AMERICAS": "americas.api.riotgames.com",
     "ASIA": "asia.api.riotgames.com",
     "EUROPE": "europe.api.riotgames.com",
@@ -80,7 +84,7 @@ def test_every_platform_has_typed_routes_and_display_names(platform_code: str) -
     assert routes.platform_host == platform_host
     assert routes.region == Region(region_code)
     assert routes.region.value in EXPECTED_REGIONS
-    assert routes.regional_host == REGIONAL_HOSTS[region_code]
+    assert routes.regional_host == EXPECTED_REGIONAL_HOSTS[region_code]
     assert routes.regional_host == routes.regional_host.lower()
     assert routes.display_name_zh == name_zh
     assert routes.display_name_en == name_en
@@ -100,8 +104,17 @@ def test_sort_orders_are_unique_and_stable() -> None:
 
 
 def test_regional_host_for_returns_closed_catalog_hosts() -> None:
-    for region_code, host in REGIONAL_HOSTS.items():
+    for region_code, host in EXPECTED_REGIONAL_HOSTS.items():
         assert regional_host_for(Region(region_code)) == host
+
+
+def test_routing_catalogs_are_read_only_mappings() -> None:
+    assert isinstance(ROUTES, MappingProxyType)
+    assert isinstance(REGIONAL_HOSTS, MappingProxyType)
+    with pytest.raises(TypeError):
+        ROUTES[Platform.NA1] = ROUTES[Platform.NA1]  # type: ignore[index]
+    with pytest.raises(TypeError):
+        REGIONAL_HOSTS[Region.AMERICAS] = "evil.example"  # type: ignore[index]
 
 
 def test_display_name_for_supports_zh_and_en_locales() -> None:
@@ -109,6 +122,13 @@ def test_display_name_for_supports_zh_and_en_locales() -> None:
     assert display_name_for(Platform.NA1, "en-US") == "North America"
     assert display_name_for(Platform.EUW1, "zh-CN") == "欧西服"
     assert display_name_for(Platform.EUW1, "en-US") == "Europe West"
+
+
+def test_display_name_for_rejects_unsupported_locales() -> None:
+    with pytest.raises(ValueError, match="unsupported locale"):
+        display_name_for(Platform.NA1, "fr-FR")
+    with pytest.raises(ValueError, match="unsupported locale"):
+        display_name_for(Platform.NA1, "")
 
 
 def test_unknown_platform_and_region_are_rejected_before_an_upstream_request() -> None:

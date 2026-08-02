@@ -1,6 +1,7 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from types import MappingProxyType
 
 
 class Region(StrEnum):
@@ -29,12 +30,13 @@ class Platform(StrEnum):
     VN2 = "VN2"
 
 
-REGIONAL_HOSTS: dict[Region, str] = {
+_REGIONAL_HOSTS: dict[Region, str] = {
     Region.AMERICAS: "americas.api.riotgames.com",
     Region.ASIA: "asia.api.riotgames.com",
     Region.EUROPE: "europe.api.riotgames.com",
     Region.SEA: "sea.api.riotgames.com",
 }
+REGIONAL_HOSTS: Mapping[Region, str] = MappingProxyType(_REGIONAL_HOSTS)
 
 
 @dataclass(frozen=True)
@@ -50,7 +52,7 @@ class RiotRoutes:
         return REGIONAL_HOSTS[self.region]
 
 
-ROUTES: dict[Platform, RiotRoutes] = {
+_ROUTES: dict[Platform, RiotRoutes] = {
     Platform.BR1: RiotRoutes(
         region=Region.AMERICAS,
         platform_host="br1.api.riotgames.com",
@@ -164,6 +166,7 @@ ROUTES: dict[Platform, RiotRoutes] = {
         sort_order=160,
     ),
 }
+ROUTES: Mapping[Platform, RiotRoutes] = MappingProxyType(_ROUTES)
 
 
 def routes_for(platform: Platform) -> RiotRoutes:
@@ -180,8 +183,10 @@ def ordered_platforms() -> tuple[Platform, ...]:
     )
 
 
-def display_name_for(platform: Platform, locale: Literal["zh-CN", "en-US"]) -> str:
+def display_name_for(platform: Platform, locale: str) -> str:
     routes = routes_for(platform)
     if locale == "zh-CN":
         return routes.display_name_zh
-    return routes.display_name_en
+    if locale == "en-US":
+        return routes.display_name_en
+    raise ValueError(f"unsupported locale: {locale!r}")

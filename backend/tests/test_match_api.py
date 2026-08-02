@@ -190,7 +190,7 @@ def test_recent_match_api_validates_count_before_service_call(
 @pytest.mark.parametrize(
     "params",
     [
-        {"platform": "EUW1", "count": 10},
+        {"platform": "XYZ1", "count": 10},
         {"platform": "NA1", "count": 10, "locale": "ko-KR"},
     ],
 )

@@ -163,7 +163,7 @@ def test_resolve_player_passthroughs_safe_riot_error_and_cors_headers(
 def test_resolve_player_rejects_unsupported_platform(player_client: TestClient) -> None:
     response = player_client.get(
         "/api/v1/players/resolve",
-        params={"platform": "EUW1", "game_name": "Player", "tag_line": "1115"},
+        params={"platform": "XYZ1", "game_name": "Player", "tag_line": "1115"},
     )
 
     assert response.status_code == 422
