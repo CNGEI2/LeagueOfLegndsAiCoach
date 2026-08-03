@@ -11,7 +11,12 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from botocore.exceptions import ClientError
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
+
 from app.core.config import Settings
+from app.core.metrics import MetricsRegistry
 from app.models.replay import ReplayArtifactRow, ReplayJobRow, ReplayUploadRow
 from app.repositories.replays import ReplayArtifactConflict, ReplayStateConflict
 from app.services.replays.domain import (
@@ -282,6 +287,7 @@ class FakeReplayStorage:
     events: list[str] = field(default_factory=list)
     fail_upload_times: int = 0
     fail_delete_prefix_times: int = 0
+    fail_delete_prefix_error: BaseException | None = None
     uploads: int = 0
 
     async def create_upload_target(self, *args: object, **kwargs: object) -> object:
@@ -353,6 +359,8 @@ class FakeReplayStorage:
         if self.fail_delete_prefix_times > 0:
             self.fail_delete_prefix_times -= 1
             self.events.append(f"delete_prefix_failed:{prefix}")
+            if self.fail_delete_prefix_error is not None:
+                raise self.fail_delete_prefix_error
             raise TimeoutError("storage delete_prefix temporarily unavailable")
         self.events.append(f"delete_prefix:{prefix}")
         removed = [key for key in self.objects if key == prefix or key.startswith(f"{prefix}/")]
@@ -422,6 +430,7 @@ def _processor(
     media: FakeMediaRunner | None = None,
     artifacts: FakeReplayArtifactRepository | None = None,
     jobs: FakeReplayJobRepository | None = None,
+    metrics: MetricsRegistry | None = None,
 ) -> tuple[
     ReplayProcessor,
     FakeReplayRepository,
@@ -447,8 +456,20 @@ def _processor(
         storage=store,
         media=media_runner,
         clock=lambda: NOW,
+        metrics=metrics,
     )
     return processor, replay_repo, job_repo, artifact_repo, store, media_runner, shared
+
+
+def _client_error() -> ClientError:
+    return ClientError(
+        {"Error": {"Code": "InternalError", "Message": "s3 unavailable"}},
+        "DeleteObjects",
+    )
+
+
+def _sqlalchemy_operational_error() -> OperationalError:
+    return OperationalError("DELETE", {}, Exception("db unavailable"))
 
 
 @pytest.mark.asyncio
@@ -988,8 +1009,9 @@ async def test_cancel_cleanup_delete_prefix_failure_retries_then_cancels() -> No
     await processor.process(job)
 
     assert job.status == ReplayJobStatus.RETRY_SCHEDULED.value
+    assert job.last_error_code == "REPLAY_CLEANUP_FAILED"
     assert "job_cancelled" not in events
-    assert any(item.startswith("job_retry:") for item in events)
+    assert "job_retry:REPLAY_CLEANUP_FAILED" in events
     assert any(item.startswith("delete_prefix_failed:") for item in events)
     assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
     assert len(artifact_repo.rows) == 1
@@ -1055,7 +1077,9 @@ async def test_cancel_cleanup_artifact_rows_failure_retries_then_cancels() -> No
     await processor.process(job)
 
     assert job.status == ReplayJobStatus.RETRY_SCHEDULED.value
+    assert job.last_error_code == "REPLAY_CLEANUP_FAILED"
     assert "job_cancelled" not in events
+    assert "job_retry:REPLAY_CLEANUP_FAILED" in events
     assert "artifact_rows_delete_failed" in events
     assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
     assert len(artifact_repo.rows) == 1
@@ -1066,6 +1090,100 @@ async def test_cancel_cleanup_artifact_rows_failure_retries_then_cancels() -> No
     assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
     assert not any(key.startswith("normalized/") for key in store.objects)
     assert artifact_repo.rows == []
+
+
+@pytest.mark.parametrize(
+    ("cleanup_error", "label"),
+    [
+        (_client_error(), "botocore_client_error"),
+        (SATimeoutError("SELECT 1", {}, Exception("db timeout")), "sqlalchemy_timeout"),
+        (_sqlalchemy_operational_error(), "sqlalchemy_operational"),
+        (Exception("unexpected cleanup boom"), "plain_exception"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cancel_cleanup_production_exceptions_all_retry_then_cancel(
+    cleanup_error: BaseException, label: str
+) -> None:
+    """Any cancellation-sweep exception is retryable cleanup, not media classify."""
+    del label
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    events: list[str] = []
+    metrics = MetricsRegistry()
+
+    class DeletedDuringUpload(FakeReplayStorage):
+        async def upload_from_path(self, key: str, source: Path) -> StoredObject:
+            stored = await super().upload_from_path(key, source)
+            if "normalized/" in key:
+                await replay_repo.scrub_deleted(replay.id, now=NOW)
+            return stored
+
+    store = DeletedDuringUpload(
+        objects={replay.source_object_key or "": SOURCE_BYTES},
+        events=events,
+        fail_delete_prefix_times=1,
+        fail_delete_prefix_error=cleanup_error,
+    )
+    processor, replay_repo, job_repo, artifact_repo, _, _, _ = _processor(
+        replay=replay, events=events, storage=store, metrics=metrics
+    )
+    job = _job(replay.id, attempt_count=1)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.RETRY_SCHEDULED.value
+    assert job.last_error_code == "REPLAY_CLEANUP_FAILED"
+    assert "job_retry:REPLAY_CLEANUP_FAILED" in events
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert metrics.replay_processing_failures_total.value(error_code="REPLAY_CLEANUP_FAILED") == 1
+    assert metrics.replay_job_retries_total.value(kind=ReplayJobKind.PROCESS.value) == 1
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.CANCELLED.value
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert not any(key.startswith("normalized/") for key in store.objects)
+    assert not any(key.startswith(f"frames/{replay.id}") for key in store.objects)
+    assert artifact_repo.rows == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_cleanup_retries_exhausted_fails_job_keeps_deleted() -> None:
+    replay = _replay(match_duration_ms=60_000, game_time_zero_ms=1_000)
+    events: list[str] = []
+    metrics = MetricsRegistry()
+
+    class DeletedDuringUpload(FakeReplayStorage):
+        async def upload_from_path(self, key: str, source: Path) -> StoredObject:
+            stored = await super().upload_from_path(key, source)
+            if "normalized/" in key:
+                await replay_repo.scrub_deleted(replay.id, now=NOW)
+            return stored
+
+        async def delete_prefix(self, prefix: str) -> None:
+            self.events.append(f"delete_prefix_failed:{prefix}")
+            raise Exception("cleanup still unavailable")
+
+    store = DeletedDuringUpload(
+        objects={replay.source_object_key or "": SOURCE_BYTES},
+        events=events,
+    )
+    processor, replay_repo, job_repo, _, _, _, _ = _processor(
+        replay=replay, events=events, storage=store, metrics=metrics
+    )
+    job = _job(replay.id, attempt_count=3)
+    job_repo.jobs[job.id] = job
+
+    await processor.process(job)
+
+    assert job.status == ReplayJobStatus.FAILED.value
+    assert job.last_error_code == "REPLAY_CLEANUP_FAILED"
+    assert "job_failed:REPLAY_CLEANUP_FAILED" in events
+    assert "job_cancelled" not in events
+    assert replay_repo.rows[replay.id].status == ReplayStatus.DELETED.value
+    assert metrics.replay_processing_failures_total.value(error_code="REPLAY_CLEANUP_FAILED") == 1
+    assert metrics.replay_job_retries_total.value(kind=ReplayJobKind.PROCESS.value) == 0
 
 
 @pytest.mark.asyncio

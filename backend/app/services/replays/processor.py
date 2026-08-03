@@ -60,6 +60,8 @@ class ReplayProcessingCancelled(Exception):
 
 
 _PROCESS_CANCEL_STATUSES = frozenset({ReplayStatus.DELETING, ReplayStatus.DELETED})
+# Cancellation sweep failures are always retryable; do not reuse media/classify.
+_CANCEL_CLEANUP_ERROR_CODE = "REPLAY_CLEANUP_FAILED"
 
 
 class ReplayProcessor:
@@ -623,8 +625,17 @@ class ReplayProcessor:
         job.status = ReplayJobStatus.CANCELLED.value
 
     async def _handle_cancelled_cleanup_failure(self, job: ReplayJobRow, error: Exception) -> None:
-        """Retry cleanup via PROCESS failure semantics without mutating DELETED."""
-        await self._handle_process_failure(job, error)
+        """Schedule retry for any cancellation-sweep failure; never mutate DELETED."""
+        del error
+        now = self._clock()
+        await self._fail_job(
+            job,
+            error=RuntimeError(_CANCEL_CLEANUP_ERROR_CODE),
+            retryable=True,
+            now=now,
+            code=_CANCEL_CLEANUP_ERROR_CODE,
+        )
+        self._metrics.replay_processing_failures_total.inc(error_code=_CANCEL_CLEANUP_ERROR_CODE)
 
     async def _sweep_cancelled_derived(self, replay_id: UUID) -> None:
         """Idempotent cleanup of PROCESS outputs after cancellation."""
