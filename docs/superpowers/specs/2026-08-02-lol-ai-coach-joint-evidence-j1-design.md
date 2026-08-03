@@ -1,7 +1,7 @@
 # LoL AI Coach — Joint Evidence J1 Design
 
-**Status:** Approved design, 2026-08-02  
-**Implementation owner:** Cursor  
+**Status:** Approved design, 2026-08-02
+**Implementation owner:** Cursor
 **Design and review owner:** Codex
 
 ## 1. Goal
