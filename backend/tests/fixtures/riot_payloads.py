@@ -36,3 +36,114 @@ MATCH_PAYLOAD: dict[str, object] = {
         ],
     },
 }
+
+
+def _synthetic_participant_frame(participant_id: int) -> dict[str, object]:
+    return {
+        "participantId": participant_id,
+        "level": participant_id,
+        "currentGold": 100 * participant_id,
+        "totalGold": 1000 * participant_id,
+        "minionsKilled": 10 * participant_id,
+        "jungleMinionsKilled": participant_id,
+        "xp": 200 * participant_id,
+        "position": {"x": 100 * participant_id, "y": 200 * participant_id},
+        "unexpectedFrameField": "ignored",
+    }
+
+
+TIMELINE_PAYLOAD: dict[str, object] = {
+    "metadata": {
+        "matchId": "NA1_fixture_timeline",
+        "participants": [f"fixture-puuid-{index}" for index in range(1, 11)],
+        "unexpectedMetadataField": "ignored",
+    },
+    "info": {
+        "frameInterval": 60_000,
+        "frames": [
+            {
+                "timestamp": 0,
+                "participantFrames": {
+                    str(index): _synthetic_participant_frame(index) for index in range(1, 11)
+                },
+                "events": [
+                    {
+                        "type": "ITEM_PURCHASED",
+                        "timestamp": 1_000,
+                        "participantId": 1,
+                        "itemId": 1055,
+                    },
+                    {
+                        "type": "UNKNOWN_EVENT_TYPE",
+                        "timestamp": 1_500,
+                        "arbitrary": True,
+                    },
+                ],
+                "unexpectedFrameContainerField": "ignored",
+            },
+            {
+                "timestamp": 60_000,
+                "participantFrames": {
+                    str(index): _synthetic_participant_frame(index) for index in range(1, 11)
+                },
+                "events": [
+                    {
+                        "type": "CHAMPION_KILL",
+                        "timestamp": 61_000,
+                        "killerId": 1,
+                        "victimId": 6,
+                        "assistingParticipantIds": [2, 3],
+                        "position": {"x": 4000, "y": 5000},
+                    },
+                    {
+                        "type": "ELITE_MONSTER_KILL",
+                        "timestamp": 62_000,
+                        "killerId": 2,
+                        "killerTeamId": 100,
+                        "monsterType": "DRAGON",
+                        "monsterSubType": "FIRE_DRAGON",
+                        "position": {"x": 9800, "y": 4400},
+                    },
+                    {
+                        "type": "BUILDING_KILL",
+                        "timestamp": 63_000,
+                        "killerId": 3,
+                        "teamId": 200,
+                        "buildingType": "TOWER_BUILDING",
+                        "laneType": "MID_LANE",
+                        "towerType": "OUTER_TURRET",
+                        "position": {"x": 8955, "y": 8510},
+                    },
+                    {
+                        "type": "ITEM_SOLD",
+                        "timestamp": 64_000,
+                        "participantId": 4,
+                        "itemId": 1001,
+                    },
+                    {
+                        "type": "ITEM_DESTROYED",
+                        "timestamp": 65_000,
+                        "participantId": 5,
+                        "itemId": 2003,
+                    },
+                    {
+                        "type": "ITEM_UNDO",
+                        "timestamp": 66_000,
+                        "participantId": 1,
+                        "beforeId": 1055,
+                        "afterId": 0,
+                    },
+                    {
+                        "type": "CHAMPION_KILL",
+                        "timestamp": 67_000,
+                        "killerId": 0,
+                        "victimId": 7,
+                        "assistingParticipantIds": [],
+                    },
+                ],
+            },
+        ],
+        "unexpectedInfoField": "ignored",
+    },
+    "unexpectedTopLevelField": "ignored",
+}

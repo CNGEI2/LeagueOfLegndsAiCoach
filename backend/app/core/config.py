@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     riot_platform_detection_not_found_ttl_seconds: int = Field(default=300, ge=30, le=3600)
     riot_platform_confirmation_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     riot_account_primary_region: Region = Region.AMERICAS
+    joint_evidence_enabled: bool = False
+    timeline_cache_ttl_seconds: int = Field(default=2_592_000, ge=3_600, le=7_776_000)
+    timeline_not_found_ttl_seconds: int = Field(default=300, ge=30, le=3_600)
     player_cache_ttl_seconds: int = 900
     recent_matches_cache_ttl_seconds: int = 120
     match_retention_days: int = 30

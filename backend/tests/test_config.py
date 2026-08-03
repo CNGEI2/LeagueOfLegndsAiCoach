@@ -161,3 +161,37 @@ def test_riot_max_concurrency_is_bounded_as_shared_probe_limit() -> None:
     assert settings.riot_max_concurrency == 1
     settings = Settings(_env_file=None, riot_max_concurrency=16)
     assert settings.riot_max_concurrency == 16
+
+
+def test_joint_evidence_settings_have_safe_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.joint_evidence_enabled is False
+    assert settings.timeline_cache_ttl_seconds == 2_592_000
+    assert settings.timeline_not_found_ttl_seconds == 300
+
+
+def test_joint_evidence_ttl_bounds_are_enforced() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, timeline_cache_ttl_seconds=3_599)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, timeline_cache_ttl_seconds=7_776_001)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, timeline_not_found_ttl_seconds=29)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, timeline_not_found_ttl_seconds=3_601)
+
+    settings = Settings(
+        _env_file=None,
+        timeline_cache_ttl_seconds=3_600,
+        timeline_not_found_ttl_seconds=30,
+    )
+    assert settings.timeline_cache_ttl_seconds == 3_600
+    assert settings.timeline_not_found_ttl_seconds == 30
+    settings = Settings(
+        _env_file=None,
+        timeline_cache_ttl_seconds=7_776_000,
+        timeline_not_found_ttl_seconds=3_600,
+    )
+    assert settings.timeline_cache_ttl_seconds == 7_776_000
+    assert settings.timeline_not_found_ttl_seconds == 3_600

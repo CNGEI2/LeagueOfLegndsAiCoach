@@ -6,8 +6,10 @@ from app.services.riot.dto import (
     AccountDto,
     MatchDto,
     SummonerDto,
+    TimelineDto,
     validate_match_ids,
     validate_riot_model,
+    validate_timeline_payload,
 )
 
 
@@ -76,3 +78,13 @@ class RiotGateway:
             not_found_code="MATCH_NOT_FOUND",
         )
         return validate_riot_model(MatchDto, payload)
+
+    async def get_match_timeline(self, *, platform: Platform, match_id: str) -> TimelineDto:
+        host = routes_for(platform).regional_host
+        payload = await self._client.get_json(
+            host=host,
+            path=f"/lol/match/v5/matches/{quote(match_id, safe='')}/timeline",
+            params=None,
+            not_found_code="MATCH_TIMELINE_NOT_FOUND",
+        )
+        return validate_timeline_payload(payload)

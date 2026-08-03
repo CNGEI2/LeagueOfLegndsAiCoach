@@ -261,6 +261,29 @@ async def test_riot_client_uses_contextual_not_found_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_riot_client_uses_timeline_not_found_code_without_body_leakage() -> None:
+    """Timeline 404 must keep the Timeline-specific code and omit response text."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(404, json={"secret": "timeline-missing-body"})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as transport_client:
+        with pytest.raises(ApiError) as caught:
+            await RiotHttpClient(api_key="RGAPI-fake", client=transport_client).get_json(
+                host="europe.api.riotgames.com",
+                path="/lol/match/v5/matches/EUW1_1/timeline",
+                params=None,
+                not_found_code="MATCH_TIMELINE_NOT_FOUND",
+            )
+
+    assert caught.value.status_code == 404
+    assert caught.value.code == "MATCH_TIMELINE_NOT_FOUND"
+    assert caught.value.retryable is False
+    assert "secret" not in caught.value.message
+    assert "timeline-missing-body" not in caught.value.message
+
+
+@pytest.mark.asyncio
 async def test_riot_client_retries_a_server_failure_once() -> None:
     """A transient 5xx should have exactly one bounded retry."""
     requests = 0
