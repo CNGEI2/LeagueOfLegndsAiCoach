@@ -87,4 +87,4 @@ class RiotGateway:
             params=None,
             not_found_code="MATCH_TIMELINE_NOT_FOUND",
         )
-        return validate_timeline_payload(payload)
+        return validate_timeline_payload(payload, match_id=match_id)

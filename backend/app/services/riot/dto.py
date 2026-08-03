@@ -1,7 +1,8 @@
-from typing import Any, Self, TypeVar
+from typing import Annotated, Any, Self, TypeVar
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     TypeAdapter,
@@ -22,6 +23,48 @@ _SUPPORTED_TIMELINE_EVENT_TYPES = frozenset(
         "ITEM_UNDO",
     }
 )
+
+_EVENT_FIELD_ALLOWLIST: dict[str, frozenset[str]] = {
+    "CHAMPION_KILL": frozenset(
+        {"type", "timestamp", "killerId", "victimId", "assistingParticipantIds", "position"}
+    ),
+    "ELITE_MONSTER_KILL": frozenset(
+        {
+            "type",
+            "timestamp",
+            "killerId",
+            "killerTeamId",
+            "monsterType",
+            "monsterSubType",
+            "position",
+        }
+    ),
+    "BUILDING_KILL": frozenset(
+        {
+            "type",
+            "timestamp",
+            "killerId",
+            "teamId",
+            "buildingType",
+            "laneType",
+            "towerType",
+            "position",
+        }
+    ),
+    "ITEM_PURCHASED": frozenset({"type", "timestamp", "participantId", "itemId"}),
+    "ITEM_SOLD": frozenset({"type", "timestamp", "participantId", "itemId"}),
+    "ITEM_DESTROYED": frozenset({"type", "timestamp", "participantId", "itemId"}),
+    "ITEM_UNDO": frozenset({"type", "timestamp", "participantId", "beforeId", "afterId"}),
+}
+
+
+def _parse_strict_timeline_int(value: object) -> int:
+    if isinstance(value, bool) or type(value) is not int:
+        raise ValueError("expected a strict integer")
+    return value
+
+
+StrictTimelineInt = Annotated[int, BeforeValidator(_parse_strict_timeline_int)]
 
 
 class RiotDto(BaseModel):
@@ -87,40 +130,40 @@ class MatchDto(RiotDto):
 
 
 class TimelinePositionDto(RiotDto):
-    x: int = Field(ge=0)
-    y: int = Field(ge=0)
+    x: StrictTimelineInt = Field(ge=0)
+    y: StrictTimelineInt = Field(ge=0)
 
 
 class TimelineParticipantFrameDto(RiotDto):
-    participant_id: int = Field(alias="participantId", ge=1)
-    level: int = Field(ge=0)
-    current_gold: int = Field(alias="currentGold", ge=0)
-    total_gold: int = Field(alias="totalGold", ge=0)
-    minions_killed: int = Field(alias="minionsKilled", ge=0)
-    jungle_minions_killed: int = Field(alias="jungleMinionsKilled", ge=0)
-    xp: int = Field(ge=0)
+    participant_id: StrictTimelineInt = Field(alias="participantId", ge=1)
+    level: StrictTimelineInt = Field(ge=0)
+    current_gold: StrictTimelineInt = Field(alias="currentGold", ge=0)
+    total_gold: StrictTimelineInt = Field(alias="totalGold", ge=0)
+    minions_killed: StrictTimelineInt = Field(alias="minionsKilled", ge=0)
+    jungle_minions_killed: StrictTimelineInt = Field(alias="jungleMinionsKilled", ge=0)
+    xp: StrictTimelineInt = Field(ge=0)
     position: TimelinePositionDto | None = None
 
 
 class TimelineEventDto(RiotDto):
     type: str
-    timestamp: int = Field(ge=0)
-    killer_id: int | None = Field(default=None, alias="killerId")
-    victim_id: int | None = Field(default=None, alias="victimId")
-    assisting_participant_ids: tuple[int, ...] | None = Field(
+    timestamp: StrictTimelineInt = Field(ge=0)
+    killer_id: StrictTimelineInt | None = Field(default=None, alias="killerId")
+    victim_id: StrictTimelineInt | None = Field(default=None, alias="victimId")
+    assisting_participant_ids: tuple[StrictTimelineInt, ...] | None = Field(
         default=None, alias="assistingParticipantIds"
     )
-    killer_team_id: int | None = Field(default=None, alias="killerTeamId")
+    killer_team_id: StrictTimelineInt | None = Field(default=None, alias="killerTeamId")
     monster_type: str | None = Field(default=None, alias="monsterType")
     monster_sub_type: str | None = Field(default=None, alias="monsterSubType")
-    team_id: int | None = Field(default=None, alias="teamId")
+    team_id: StrictTimelineInt | None = Field(default=None, alias="teamId")
     building_type: str | None = Field(default=None, alias="buildingType")
     lane_type: str | None = Field(default=None, alias="laneType")
     tower_type: str | None = Field(default=None, alias="towerType")
-    participant_id: int | None = Field(default=None, alias="participantId")
-    item_id: int | None = Field(default=None, alias="itemId")
-    before_id: int | None = Field(default=None, alias="beforeId")
-    after_id: int | None = Field(default=None, alias="afterId")
+    participant_id: StrictTimelineInt | None = Field(default=None, alias="participantId")
+    item_id: StrictTimelineInt | None = Field(default=None, alias="itemId")
+    before_id: StrictTimelineInt | None = Field(default=None, alias="beforeId")
+    after_id: StrictTimelineInt | None = Field(default=None, alias="afterId")
     position: TimelinePositionDto | None = None
 
     @model_validator(mode="after")
@@ -157,22 +200,40 @@ class TimelineEventDto(RiotDto):
                 raise ValueError("item undo requires participantId")
             if self.before_id is None or self.after_id is None:
                 raise ValueError("item undo requires beforeId and afterId")
+            if self.before_id < 0 or self.after_id < 0:
+                raise ValueError("item undo ids must be non-negative")
         return self
 
 
 class TimelineFrameDto(RiotDto):
-    timestamp: int = Field(ge=0)
+    timestamp: StrictTimelineInt = Field(ge=0)
     participant_frames: dict[int, TimelineParticipantFrameDto] = Field(alias="participantFrames")
     events: tuple[TimelineEventDto, ...]
 
 
 class TimelineInfoDto(RiotDto):
-    frame_interval: int = Field(alias="frameInterval", ge=1_000, le=120_000)
+    frame_interval: StrictTimelineInt = Field(alias="frameInterval", ge=1_000, le=120_000)
     frames: tuple[TimelineFrameDto, ...]
 
 
+class TimelineMetadataDto(RiotDto):
+    match_id: str = Field(alias="matchId", min_length=1)
+    participants: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_identity_strings(self) -> Self:
+        if self.match_id.strip() == "":
+            raise ValueError("matchId must not be blank")
+        if len(self.participants) == 0:
+            raise ValueError("participants must not be empty")
+        for participant in self.participants:
+            if participant.strip() == "":
+                raise ValueError("participant identity must not be blank")
+        return self
+
+
 class TimelineDto(RiotDto):
-    metadata: MatchMetadataDto
+    metadata: TimelineMetadataDto
     info: TimelineInfoDto
 
 
@@ -206,11 +267,11 @@ def validate_match_ids(payload: object, *, max_count: int) -> tuple[str, ...]:
     return tuple(match_ids)
 
 
-def validate_timeline_payload(payload: object) -> TimelineDto:
+def validate_timeline_payload(payload: object, *, match_id: str) -> TimelineDto:
     try:
         prepared = _prepare_timeline_payload(payload)
         timeline = TimelineDto.model_validate(prepared)
-        _assert_timeline_invariants(timeline)
+        _assert_timeline_invariants(timeline, match_id=match_id)
     except (ValidationError, TypeError, ValueError, KeyError):
         raise _invalid_response() from None
     return timeline
@@ -234,10 +295,29 @@ def _prepare_timeline_payload(payload: object) -> dict[str, Any]:
         prepared_frame["participantFrames"] = _convert_participant_frames(
             frame.get("participantFrames")
         )
+        prepared_frame["events"] = _prepare_timeline_events(frame.get("events"))
         prepared_frames.append(prepared_frame)
     prepared_info = dict(info)
     prepared_info["frames"] = prepared_frames
     return {"metadata": metadata, "info": prepared_info}
+
+
+def _prepare_timeline_events(raw_events: object) -> list[dict[str, Any]]:
+    if not isinstance(raw_events, list):
+        raise TypeError("timeline events must be an array")
+    prepared: list[dict[str, Any]] = []
+    for event in raw_events:
+        if not isinstance(event, dict):
+            raise TypeError("timeline event must be an object")
+        event_type = event.get("type")
+        if not isinstance(event_type, str):
+            raise TypeError("timeline event type must be a string")
+        if event_type not in _SUPPORTED_TIMELINE_EVENT_TYPES:
+            prepared.append({"type": event_type, "timestamp": event.get("timestamp")})
+            continue
+        allowed = _EVENT_FIELD_ALLOWLIST[event_type]
+        prepared.append({key: value for key, value in event.items() if key in allowed})
+    return prepared
 
 
 def _convert_participant_frames(raw_frames: object) -> dict[int, Any]:
@@ -269,7 +349,9 @@ def _parse_participant_frame_key(key: object) -> int:
     raise ValueError("participant frame key must be a decimal participant id")
 
 
-def _assert_timeline_invariants(timeline: TimelineDto) -> None:
+def _assert_timeline_invariants(timeline: TimelineDto, *, match_id: str) -> None:
+    if timeline.metadata.match_id != match_id:
+        raise ValueError("timeline identity mismatch")
     participants = timeline.metadata.participants
     if len(participants) != len(set(participants)):
         raise ValueError("timeline participants must be unique")

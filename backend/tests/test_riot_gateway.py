@@ -606,18 +606,21 @@ async def test_gateway_gets_match_timeline_on_closed_regional_hosts(
     platform: Platform, expected_host: str
 ) -> None:
     seen_url = ""
+    match_id = "EUW1 path/with spaces"
+    payload = copy.deepcopy(TIMELINE_PAYLOAD)
+    payload["metadata"]["matchId"] = match_id
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal seen_url
         seen_url = str(request.url)
-        return httpx2.Response(200, json=TIMELINE_PAYLOAD)
+        return httpx2.Response(200, json=payload)
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
         timeline = await RiotGateway(
             RiotHttpClient(api_key="RGAPI-fake", client=raw_client)
-        ).get_match_timeline(platform=platform, match_id="EUW1 path/with spaces")
+        ).get_match_timeline(platform=platform, match_id=match_id)
 
-    assert timeline.metadata.match_id == "NA1_fixture_timeline"
+    assert timeline.metadata.match_id == match_id
     assert seen_url.startswith(f"https://{expected_host}/")
     assert seen_url.endswith("/lol/match/v5/matches/EUW1%20path%2Fwith%20spaces/timeline")
 
@@ -701,3 +704,136 @@ async def test_gateway_timeline_maps_invalid_dto_without_payload_leakage() -> No
     assert caught.value.code == "RIOT_INVALID_RESPONSE"
     assert "frameInterval" not in caught.value.message
     assert "NA1_1" not in caught.value.message
+
+
+def _set_path(payload: dict[str, Any], path: tuple[object, ...], value: object) -> None:
+    cursor: Any = payload
+    for key in path[:-1]:
+        cursor = cursor[key]
+    cursor[path[-1]] = value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [True, "1", 1.0])
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("info", "frameInterval"),
+        ("info", "frames", 0, "timestamp"),
+        ("info", "frames", 0, "participantFrames", "1", "participantId"),
+        ("info", "frames", 0, "participantFrames", "1", "level"),
+        ("info", "frames", 0, "participantFrames", "1", "currentGold"),
+        ("info", "frames", 0, "participantFrames", "1", "totalGold"),
+        ("info", "frames", 0, "participantFrames", "1", "minionsKilled"),
+        ("info", "frames", 0, "participantFrames", "1", "jungleMinionsKilled"),
+        ("info", "frames", 0, "participantFrames", "1", "xp"),
+        ("info", "frames", 0, "participantFrames", "1", "position", "x"),
+        ("info", "frames", 0, "participantFrames", "1", "position", "y"),
+        ("info", "frames", 0, "events", 0, "timestamp"),
+        ("info", "frames", 1, "events", 0, "killerId"),
+        ("info", "frames", 1, "events", 0, "victimId"),
+        ("info", "frames", 1, "events", 0, "assistingParticipantIds", 0),
+        ("info", "frames", 1, "events", 1, "killerTeamId"),
+        ("info", "frames", 1, "events", 2, "teamId"),
+        ("info", "frames", 1, "events", 3, "participantId"),
+        ("info", "frames", 1, "events", 3, "itemId"),
+        ("info", "frames", 1, "events", 5, "beforeId"),
+        ("info", "frames", 1, "events", 5, "afterId"),
+    ],
+)
+async def test_gateway_rejects_non_strict_timeline_integers(
+    path: tuple[object, ...], bad_value: object
+) -> None:
+    """Timeline critical numerics must reject bools, numeric strings, and floats."""
+    await _reject_timeline(lambda payload: _set_path(payload, path, bad_value))
+
+
+@pytest.mark.asyncio
+async def test_gateway_accepts_item_undo_zero_ids_with_strict_integers() -> None:
+    timeline = await _fetch_timeline(TIMELINE_PAYLOAD)
+    undo = next(event for event in timeline.info.frames[1].events if event.type == "ITEM_UNDO")
+    dumped = undo.model_dump(by_alias=True)
+    assert dumped["beforeId"] == 1055
+    assert dumped["afterId"] == 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_accepts_unknown_events_with_wrong_typed_known_field_names() -> None:
+    payload = copy.deepcopy(TIMELINE_PAYLOAD)
+    payload["info"]["frames"][0]["events"].append(
+        {"type": "FUTURE_EVENT", "timestamp": 1, "killerId": "system"}
+    )
+    timeline = await _fetch_timeline(payload)
+    future = [event for event in timeline.info.frames[0].events if event.type == "FUTURE_EVENT"]
+    assert len(future) == 1
+    assert future[0].timestamp == 1
+    assert future[0].model_dump(by_alias=True).get("killerId") is None
+
+
+@pytest.mark.asyncio
+async def test_gateway_ignores_unrelated_fields_on_known_timeline_events() -> None:
+    payload = copy.deepcopy(TIMELINE_PAYLOAD)
+    payload["info"]["frames"][1]["events"][0]["itemId"] = "not-an-int"
+    payload["info"]["frames"][1]["events"][0]["beforeId"] = True
+    timeline = await _fetch_timeline(payload)
+    kill = timeline.info.frames[1].events[0]
+    assert kill.type == "CHAMPION_KILL"
+    assert kill.model_dump(by_alias=True)["killerId"] == 1
+    assert kill.model_dump(by_alias=True).get("itemId") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("match_id", ["", "   ", "\t"])
+async def test_gateway_rejects_blank_timeline_match_id(match_id: str) -> None:
+    await _reject_timeline(lambda payload: payload["metadata"].__setitem__("matchId", match_id))
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_empty_or_blank_timeline_participants() -> None:
+    await _reject_timeline(lambda payload: payload["metadata"].__setitem__("participants", []))
+    await _reject_timeline(
+        lambda payload: payload["metadata"].__setitem__(
+            "participants",
+            ["fixture-puuid-1", "   ", "fixture-puuid-3"],
+        )
+    )
+    await _reject_timeline(
+        lambda payload: payload["metadata"].__setitem__(
+            "participants",
+            ["fixture-puuid-1", "", "fixture-puuid-3"],
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_timeline_match_id_mismatch_without_leaking_ids() -> None:
+    request_match_id = "NA1_requested_match"
+    response_match_id = "NA1_fixture_timeline"
+    with pytest.raises(ApiError) as caught:
+        await _fetch_timeline(TIMELINE_PAYLOAD, match_id=request_match_id)
+
+    assert caught.value.status_code == 502
+    assert caught.value.code == "RIOT_INVALID_RESPONSE"
+    assert request_match_id not in caught.value.message
+    assert response_match_id not in caught.value.message
+    assert caught.value.message == "Riot returned an invalid response."
+
+
+@pytest.mark.asyncio
+async def test_gateway_timeline_maps_read_timeout_to_unavailable() -> None:
+    def timeout_handler(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("upstream read timeout", request=request)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(timeout_handler)) as raw_client:
+        with pytest.raises(ApiError) as caught:
+            await RiotGateway(
+                RiotHttpClient(
+                    api_key="RGAPI-fake",
+                    client=raw_client,
+                    sleep=lambda _: asyncio.sleep(0),
+                )
+            ).get_match_timeline(platform=Platform.NA1, match_id="NA1_fixture_timeline")
+
+    assert caught.value.code == "RIOT_UNAVAILABLE"
+    assert caught.value.retryable is True
+    assert "upstream read timeout" not in caught.value.message
