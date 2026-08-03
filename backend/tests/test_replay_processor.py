@@ -10,7 +10,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-
 from botocore.exceptions import ClientError
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
