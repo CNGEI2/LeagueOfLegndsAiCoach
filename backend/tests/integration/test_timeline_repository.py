@@ -1,4 +1,5 @@
 import asyncio
+import copy
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -394,3 +395,82 @@ async def test_timeline_repository_not_found_skips_snapshot_validation(
     await repository.upsert(negative)
     loaded = await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
     assert loaded == negative
+
+
+@pytest.mark.asyncio
+async def test_timeline_repository_rejects_numeric_string_coercion_in_cached_snapshot(
+    session_factory,
+) -> None:
+    repository = SqlTimelineRepository(session_factory)
+    now = _now()
+    match_id = f"NA1_coerce_interval_{uuid_hex()}"
+    valid = make_record(
+        match_id=match_id,
+        fetched_at=now,
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+    )
+    await repository.upsert(valid)
+
+    corrupted_snapshot = copy.deepcopy(valid.normalized_snapshot)
+    assert corrupted_snapshot is not None
+    assert isinstance(corrupted_snapshot["frame_interval_ms"], int)
+    corrupted_snapshot["frame_interval_ms"] = str(corrupted_snapshot["frame_interval_ms"])
+    corrupted = make_record(
+        match_id=match_id,
+        normalized_snapshot=corrupted_snapshot,
+        snapshot_hash=valid.snapshot_hash,
+        fetched_at=now + timedelta(seconds=1),
+        expires_at=now + timedelta(hours=1),
+        created_at=now + timedelta(seconds=1),
+        updated_at=now + timedelta(seconds=1),
+    )
+    await repository.upsert(corrupted)
+
+    with pytest.raises(ApiError) as error:
+        await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
+    assert error.value.code == "RIOT_INVALID_RESPONSE"
+    assert "60000" not in error.value.message
+    assert match_id not in error.value.message
+
+
+@pytest.mark.asyncio
+async def test_timeline_repository_rejects_nested_fact_numeric_string_coercion(
+    session_factory,
+) -> None:
+    repository = SqlTimelineRepository(session_factory)
+    now = _now()
+    match_id = f"NA1_coerce_fact_{uuid_hex()}"
+    valid = make_record(
+        match_id=match_id,
+        fetched_at=now,
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+    )
+    await repository.upsert(valid)
+
+    corrupted_snapshot = copy.deepcopy(valid.normalized_snapshot)
+    assert corrupted_snapshot is not None
+    facts = corrupted_snapshot["facts"]
+    assert isinstance(facts, list)
+    kill = next(fact for fact in facts if fact["kind"] == "champion_kill")
+    assert isinstance(kill["killer_id"], int)
+    kill["killer_id"] = str(kill["killer_id"])
+    corrupted = make_record(
+        match_id=match_id,
+        normalized_snapshot=corrupted_snapshot,
+        snapshot_hash=valid.snapshot_hash,
+        fetched_at=now + timedelta(seconds=1),
+        expires_at=now + timedelta(hours=1),
+        created_at=now + timedelta(seconds=1),
+        updated_at=now + timedelta(seconds=1),
+    )
+    await repository.upsert(corrupted)
+
+    with pytest.raises(ApiError) as error:
+        await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
+    assert error.value.code == "RIOT_INVALID_RESPONSE"
+    assert "killer" not in error.value.message.lower()
+    assert match_id not in error.value.message

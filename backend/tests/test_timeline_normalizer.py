@@ -3,10 +3,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from typing import get_args
+from types import UnionType
+from typing import Annotated, Union, get_args, get_origin
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
+from pydantic.fields import FieldInfo
 
 from app.core.routing import Platform
 from app.services.riot.dto import validate_timeline_payload
@@ -57,13 +59,181 @@ def test_timeline_snapshot_and_facts_are_frozen_forbid_extra() -> None:
             type(fact).model_validate({**fact.model_dump(mode="json"), "unexpected": True})
 
 
-def test_timeline_fact_union_covers_supported_kinds() -> None:
-    args = get_args(TimelineFact)
-    assert ChampionKillFact in args
-    assert EliteMonsterKillFact in args
-    assert BuildingKillFact in args
-    assert ItemEventFact in args
-    assert ParticipantStateFact in args
+def _timeline_fact_union_members() -> tuple[type, ...]:
+    assert get_origin(TimelineFact) is Annotated
+    union_type, field_info = get_args(TimelineFact)
+    assert isinstance(field_info, FieldInfo)
+    assert field_info.discriminator == "kind"
+    assert get_origin(union_type) in {Union, UnionType}
+    return get_args(union_type)
+
+
+def test_timeline_fact_is_kind_discriminated_union() -> None:
+    members = _timeline_fact_union_members()
+    assert ChampionKillFact in members
+    assert EliteMonsterKillFact in members
+    assert BuildingKillFact in members
+    assert ItemEventFact in members
+    assert ParticipantStateFact in members
+
+
+def test_timeline_fact_adapter_parses_by_kind_discriminator() -> None:
+    adapter = TypeAdapter(TimelineFact)
+    kill = adapter.validate_python(
+        {
+            "fact_id": "timeline:NA1:NA1_fixture:v1:frame:1:event:0",
+            "kind": "champion_kill",
+            "timestamp_ms": 61_000,
+            "frame_index": 1,
+            "event_index": 0,
+            "killer_id": 1,
+            "victim_id": 6,
+            "assisting_participant_ids": [2, 3],
+            "position": {"x": 4000, "y": 5000},
+        }
+    )
+    assert isinstance(kill, ChampionKillFact)
+    purchased = adapter.validate_python(
+        {
+            "fact_id": "timeline:NA1:NA1_fixture:v1:frame:0:event:0",
+            "kind": "item_purchased",
+            "timestamp_ms": 1_000,
+            "frame_index": 0,
+            "event_index": 0,
+            "participant_id": 1,
+            "item_id": 1055,
+            "before_id": None,
+            "after_id": None,
+        }
+    )
+    assert isinstance(purchased, ItemEventFact)
+    assert purchased.kind == "item_purchased"
+    with pytest.raises(ValidationError):
+        adapter.validate_python(
+            {
+                "fact_id": "timeline:NA1:NA1_fixture:v1:frame:1:event:0",
+                "kind": "champion_kill",
+                "timestamp_ms": 61_000,
+                "frame_index": 1,
+                "event_index": 0,
+                "killer_id": 1,
+                "victim_id": 6,
+                "assisting_participant_ids": [2, 3],
+                "position": {"x": 4000, "y": 5000},
+                "item_id": 1055,
+            }
+        )
+
+
+def test_item_event_fact_shape_is_strict_and_preserves_zero() -> None:
+    purchased = ItemEventFact(
+        fact_id="timeline:NA1:m:v1:frame:0:event:0",
+        kind="item_purchased",
+        timestamp_ms=1_000,
+        frame_index=0,
+        event_index=0,
+        participant_id=1,
+        item_id=0,
+        before_id=None,
+        after_id=None,
+    )
+    assert purchased.item_id == 0
+    with pytest.raises(ValidationError):
+        ItemEventFact(
+            fact_id="timeline:NA1:m:v1:frame:0:event:0",
+            kind="item_purchased",
+            timestamp_ms=1_000,
+            frame_index=0,
+            event_index=0,
+            participant_id=1,
+            item_id=1055,
+            before_id=0,
+            after_id=None,
+        )
+    with pytest.raises(ValidationError):
+        ItemEventFact(
+            fact_id="timeline:NA1:m:v1:frame:0:event:0",
+            kind="item_purchased",
+            timestamp_ms=1_000,
+            frame_index=0,
+            event_index=0,
+            participant_id=1,
+            item_id=None,
+            before_id=None,
+            after_id=None,
+        )
+    undo = ItemEventFact(
+        fact_id="timeline:NA1:m:v1:frame:0:event:1",
+        kind="item_undo",
+        timestamp_ms=2_000,
+        frame_index=0,
+        event_index=1,
+        participant_id=1,
+        item_id=None,
+        before_id=0,
+        after_id=0,
+    )
+    assert undo.before_id == 0
+    assert undo.after_id == 0
+    with pytest.raises(ValidationError):
+        ItemEventFact(
+            fact_id="timeline:NA1:m:v1:frame:0:event:1",
+            kind="item_undo",
+            timestamp_ms=2_000,
+            frame_index=0,
+            event_index=1,
+            participant_id=1,
+            item_id=1055,
+            before_id=0,
+            after_id=0,
+        )
+    with pytest.raises(ValidationError):
+        ItemEventFact(
+            fact_id="timeline:NA1:m:v1:frame:0:event:1",
+            kind="item_undo",
+            timestamp_ms=2_000,
+            frame_index=0,
+            event_index=1,
+            participant_id=1,
+            item_id=None,
+            before_id=None,
+            after_id=0,
+        )
+
+
+def test_timeline_snapshot_rejects_numeric_coercion_except_participant_keys() -> None:
+    dumped = _normalize().snapshot.model_dump(mode="json")
+    restored = TimelineSnapshot.model_validate(dumped)
+    assert restored.participant_puuids == {
+        index: f"fixture-puuid-{index}" for index in range(1, 11)
+    }
+    assert all(type(key) is int for key in restored.participant_puuids)
+
+    stringified_interval = copy.deepcopy(dumped)
+    stringified_interval["frame_interval_ms"] = str(stringified_interval["frame_interval_ms"])
+    with pytest.raises(ValidationError):
+        TimelineSnapshot.model_validate(stringified_interval)
+
+    float_interval = copy.deepcopy(dumped)
+    float_interval["frame_interval_ms"] = float(float_interval["frame_interval_ms"])
+    with pytest.raises(ValidationError):
+        TimelineSnapshot.model_validate(float_interval)
+
+    bool_interval = copy.deepcopy(dumped)
+    bool_interval["frame_interval_ms"] = True
+    with pytest.raises(ValidationError):
+        TimelineSnapshot.model_validate(bool_interval)
+
+    nested = copy.deepcopy(dumped)
+    kill = next(fact for fact in nested["facts"] if fact["kind"] == "champion_kill")
+    kill["killer_id"] = str(kill["killer_id"])
+    with pytest.raises(ValidationError):
+        TimelineSnapshot.model_validate(nested)
+
+    padded_key = copy.deepcopy(dumped)
+    padded_key["participant_puuids"] = {"01": "fixture-puuid-1"}
+    with pytest.raises(ValidationError):
+        TimelineSnapshot.model_validate(padded_key)
 
 
 def test_normalizer_preserves_champion_kill_fields() -> None:
