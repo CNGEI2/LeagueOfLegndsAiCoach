@@ -27,3 +27,17 @@ def test_compose_migrates_a_healthy_database_before_starting_the_backend() -> No
     assert "db:\n        condition: service_healthy" in migrate
     assert "migrate:\n        condition: service_completed_successfully" in backend
     assert "--no-access-log" in dockerfile
+
+
+def test_backend_imports_timeline_package_without_model_sdk_dependency() -> None:
+    import app.services.timelines as timelines
+
+    assert timelines.TimelineService is not None
+    assert timelines.TimelineResolver is not None
+    assert timelines.TimelineLoadResult is not None
+
+    pyproject = (REPOSITORY_ROOT / "backend" / "pyproject.toml").read_text().lower()
+    dockerfile = (REPOSITORY_ROOT / "backend" / "Dockerfile").read_text().lower()
+    for banned in ("openai", "anthropic", "langchain", "tiktoken", "torch", "transformers"):
+        assert banned not in pyproject
+        assert banned not in dockerfile

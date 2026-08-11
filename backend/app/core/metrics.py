@@ -53,6 +53,7 @@ _DETECTION_DURATION_BUCKETS: tuple[float, ...] = (
     10.0,
     30.0,
 )
+_TIMELINE_FETCH_DURATION_BUCKETS: tuple[float, ...] = _DETECTION_DURATION_BUCKETS
 
 
 def _label_key(labels: dict[str, str]) -> str:
@@ -203,6 +204,27 @@ class MetricsRegistry:
             "riot_platform_confirmation_total",
             "Platform confirmation attempts, labeled by closed-set outcome.",
         )
+        self.joint_evidence_timeline_requests_total = Counter(
+            "joint_evidence_timeline_requests_total",
+            "Timeline evidence requests, labeled by closed-set outcome.",
+        )
+        self.joint_evidence_timeline_cache_total = Counter(
+            "joint_evidence_timeline_cache_total",
+            "Timeline cache lookups, labeled by closed-set status.",
+        )
+        self.joint_evidence_timeline_fetch_duration_seconds = Histogram(
+            "joint_evidence_timeline_fetch_duration_seconds",
+            "Timeline upstream fetch latency in seconds, labeled by closed-set outcome.",
+            buckets=_TIMELINE_FETCH_DURATION_BUCKETS,
+        )
+        self.joint_evidence_timeline_events_total = Counter(
+            "joint_evidence_timeline_events_total",
+            "Normalized Timeline events, labeled by closed-set event_type and result.",
+        )
+        self.joint_evidence_singleflight_total = Counter(
+            "joint_evidence_singleflight_total",
+            "Timeline single-flight participation, labeled by closed-set result.",
+        )
 
     def render_prometheus_text(self) -> str:
         lines: list[str] = []
@@ -214,6 +236,10 @@ class MetricsRegistry:
             self.riot_platform_detection_cache_total,
             self.riot_platform_detection_probes_total,
             self.riot_platform_confirmation_total,
+            self.joint_evidence_timeline_requests_total,
+            self.joint_evidence_timeline_cache_total,
+            self.joint_evidence_timeline_events_total,
+            self.joint_evidence_singleflight_total,
         ):
             lines.append(f"# HELP {counter.name} {counter.description}")
             lines.append(f"# TYPE {counter.name} counter")
@@ -223,6 +249,7 @@ class MetricsRegistry:
             self.replay_processing_duration_seconds,
             self.replay_cleanup_lag_seconds,
             self.riot_platform_detection_duration_seconds,
+            self.joint_evidence_timeline_fetch_duration_seconds,
         ):
             lines.append(f"# HELP {histogram.name} {histogram.description}")
             lines.append(f"# TYPE {histogram.name} histogram")
