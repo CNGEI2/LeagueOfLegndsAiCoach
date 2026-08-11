@@ -675,3 +675,12 @@ def _replay_disabled() -> ApiError:
         message="Replay uploads are disabled.",
         retryable=False,
     )
+
+
+def replay_evidence_not_ready() -> ApiError:
+    return ApiError(
+        status_code=409,
+        code="REPLAY_EVIDENCE_NOT_READY",
+        message="The replay is not ready for evidence linkage.",
+        retryable=True,
+    )

@@ -980,3 +980,12 @@ async def test_list_artifacts_returns_presigned_access_for_presign_capable_stora
     ]
     assert artifacts[0].kind == ReplayArtifactKind.ANCHOR_FRAME
     assert "object_key" not in artifacts[0].model_dump()
+
+
+def test_replay_evidence_not_ready_factory_is_retryable_conflict() -> None:
+    from app.services.replays.service import replay_evidence_not_ready
+
+    error = replay_evidence_not_ready()
+    assert error.status_code == 409
+    assert error.code == "REPLAY_EVIDENCE_NOT_READY"
+    assert error.retryable is True
