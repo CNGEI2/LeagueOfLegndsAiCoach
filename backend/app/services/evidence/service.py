@@ -159,11 +159,11 @@ class JointEvidenceService:
             platform=request.platform, match_id=match_id
         )
         timeline = timeline_result.snapshot
-        selected_participant_id = _selected_participant_id(timeline, request.puuid)
-        selected_team_id = _selected_team_id(match, request.puuid)
-        participant_team_ids = {
-            index + 1: participant.team_id for index, participant in enumerate(match.participants)
-        }
+        participant_team_ids, selected_participant_id, selected_team_id = _join_rosters(
+            match=match,
+            timeline=timeline,
+            selected_puuid=request.puuid,
+        )
         plan = self._planner.plan(
             platform=request.platform,
             match_id=match_id,
@@ -244,34 +244,54 @@ class JointEvidenceService:
         self._metrics.joint_evidence_api_requests_total.inc(outcome="error", error_code=code)
 
 
-def _selected_participant_id(timeline: TimelineSnapshot, puuid: str) -> int:
-    matches = [
+def _join_rosters(
+    *,
+    match: MatchSnapshot,
+    timeline: TimelineSnapshot,
+    selected_puuid: str,
+) -> tuple[dict[int, int], int, int]:
+    match_teams_by_puuid: dict[str, int] = {}
+    for participant in match.participants:
+        if participant.puuid in match_teams_by_puuid:
+            raise _invalid_roster()
+        match_teams_by_puuid[participant.puuid] = participant.team_id
+
+    timeline_puuids = list(timeline.participant_puuids.values())
+    if len(timeline_puuids) != len(set(timeline_puuids)):
+        raise _invalid_roster()
+    timeline_set = set(timeline_puuids)
+    match_set = set(match_teams_by_puuid)
+    if timeline_set != match_set:
+        raise _invalid_roster()
+
+    participant_team_ids: dict[int, int] = {}
+    for participant_id, puuid in timeline.participant_puuids.items():
+        participant_team_ids[participant_id] = match_teams_by_puuid[puuid]
+
+    selected_ids = [
         participant_id
-        for participant_id, value in timeline.participant_puuids.items()
-        if value == puuid
+        for participant_id, puuid in timeline.participant_puuids.items()
+        if puuid == selected_puuid
     ]
-    if len(matches) != 1:
+    if len(selected_ids) != 1:
         raise ApiError(
             status_code=404,
             code="PLAYER_NOT_IN_MATCH",
             message="The selected player did not participate in this match.",
             retryable=False,
         )
-    return matches[0]
+    selected_participant_id = selected_ids[0]
+    selected_team_id = participant_team_ids[selected_participant_id]
+    return participant_team_ids, selected_participant_id, selected_team_id
 
 
-def _selected_team_id(match: MatchSnapshot, puuid: str) -> int:
-    matches = [
-        participant.team_id for participant in match.participants if participant.puuid == puuid
-    ]
-    if len(matches) != 1:
-        raise ApiError(
-            status_code=404,
-            code="PLAYER_NOT_IN_MATCH",
-            message="The selected player did not participate in this match.",
-            retryable=False,
-        )
-    return matches[0]
+def _invalid_roster() -> ApiError:
+    return ApiError(
+        status_code=502,
+        code="RIOT_INVALID_RESPONSE",
+        message="Riot returned an invalid response.",
+        retryable=False,
+    )
 
 
 def _collect_item_ids(facts: Sequence[TimelineFact]) -> tuple[int, ...]:

@@ -6,6 +6,7 @@ from fastapi import Request
 
 from app.core.config import Settings
 from app.core.database import Database
+from app.core.metrics import MetricsRegistry
 from app.core.metrics import metrics as default_metrics
 from app.repositories.matches import SqlMatchRepository
 from app.repositories.platform_detections import SqlPlatformDetectionRepository
@@ -72,7 +73,13 @@ class AppServices:
             raise first_error
 
 
-def build_services(*, settings: Settings, database: Database) -> AppServices:
+def build_services(
+    *,
+    settings: Settings,
+    database: Database,
+    metrics: MetricsRegistry | None = None,
+) -> AppServices:
+    registry = metrics if metrics is not None else default_metrics
     riot_raw_client = httpx2.AsyncClient()
     static_raw_client = httpx2.AsyncClient()
     riot_client = RiotHttpClient(
@@ -113,7 +120,7 @@ def build_services(*, settings: Settings, database: Database) -> AppServices:
             confirmation_ttl_seconds=settings.riot_platform_confirmation_ttl_seconds,
             primary_region=settings.riot_account_primary_region,
             max_concurrency=settings.riot_max_concurrency,
-            metrics=default_metrics,
+            metrics=registry,
         )
     else:
         platform_detection_service = DisabledPlatformDetectionService()
@@ -134,7 +141,7 @@ def build_services(*, settings: Settings, database: Database) -> AppServices:
             gateway=gateway,
             repository=SqlTimelineRepository(session_factory),
             normalizer=TimelineNormalizer(),
-            metrics=default_metrics,
+            metrics=registry,
             timeline_cache_ttl_seconds=settings.timeline_cache_ttl_seconds,
             timeline_not_found_ttl_seconds=settings.timeline_not_found_ttl_seconds,
         )
@@ -147,7 +154,7 @@ def build_services(*, settings: Settings, database: Database) -> AppServices:
                 artifact_repository=SqlReplayArtifactRepository(session_factory),
             ),
             static_resolver=static_resolver,
-            metrics=default_metrics,
+            metrics=registry,
         )
     else:
         joint_evidence_service = DisabledJointEvidenceService()

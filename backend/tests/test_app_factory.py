@@ -199,3 +199,107 @@ async def test_build_services_wires_joint_evidence_and_reuses_match_service() ->
         assert services.joint_evidence_service._match_service is services.match_service
     finally:
         await services.close()
+
+
+@pytest.mark.asyncio
+async def test_build_services_injects_shared_metrics_registry() -> None:
+    from app.core.metrics import MetricsRegistry
+    from app.services.evidence.service import JointEvidenceService
+    from app.services.platform_detection import PlatformDetectionService
+    from app.services.timelines.service import TimelineService
+
+    custom = MetricsRegistry()
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        riot_api_key="RGAPI-test",
+        joint_evidence_enabled=True,
+        riot_platform_detection_enabled=True,
+        replay_enabled=False,
+    )
+    services = build_services(
+        settings=settings,
+        database=_StubDatabase(),
+        metrics=custom,  # type: ignore[arg-type]
+    )
+    try:
+        assert isinstance(services.joint_evidence_service, JointEvidenceService)
+        assert isinstance(services.platform_detection_service, PlatformDetectionService)
+        assert services.joint_evidence_service._metrics is custom
+        assert services.platform_detection_service._metrics is custom
+        timeline = services.joint_evidence_service._timeline_service
+        assert isinstance(timeline, TimelineService)
+        assert timeline._metrics is custom
+        custom.joint_evidence_api_requests_total.inc(outcome="ready", error_code="none")
+        assert (
+            services.joint_evidence_service._metrics.joint_evidence_api_requests_total.value(
+                outcome="ready", error_code="none"
+            )
+            == 1.0
+        )
+    finally:
+        await services.close()
+
+
+def test_create_app_resolves_metrics_before_build_services_and_exposes_same_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.core.database import Database
+    from app.core.metrics import MetricsRegistry
+    from app.core.metrics import metrics as default_metrics
+
+    custom = MetricsRegistry()
+    captured: dict[str, MetricsRegistry] = {}
+
+    def fake_build(
+        *,
+        settings: Settings,
+        database: object,
+        metrics: MetricsRegistry = default_metrics,
+    ) -> AppServices:
+        captured["metrics"] = metrics
+        return AppServices(
+            player_service=FakePlayerService(),
+            match_service=FakeMatchService(),
+            replay_service=FakeReplayService(),
+            platform_detection_service=FakePlatformDetectionService(),
+            closers=(),
+        )
+
+    class StubDatabase(Database):
+        def __init__(self) -> None:
+            self.session_factory = object()
+
+        async def ping(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.main.build_services", fake_build)
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        riot_api_key="RGAPI-test",
+        joint_evidence_enabled=False,
+        replay_enabled=False,
+        internal_metrics_token="test-metrics-token",
+    )
+    application = create_app(
+        settings=settings,
+        database=StubDatabase(),  # type: ignore[arg-type]
+        replay_metrics=custom,
+    )
+    assert captured["metrics"] is custom
+    assert application.state.replay_metrics is custom
+    custom.joint_evidence_windows_total.inc(result="planned")
+    with TestClient(application) as client:
+        rendered = client.get(
+            "/internal/metrics",
+            headers={"Authorization": "Bearer test-metrics-token"},
+        ).text
+    assert 'joint_evidence_windows_total{result="planned"} 1.0' in rendered

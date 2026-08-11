@@ -33,10 +33,15 @@ def create_app(
 ) -> FastAPI:
     resolved_settings = settings or Settings()
     resolved_database = database or Database(resolved_settings.database_url)
+    resolved_metrics = replay_metrics or default_metrics
     if services is None:
         if not isinstance(resolved_database, Database):
             raise TypeError("services must be provided when using a non-SQL database")
-        resolved_services = build_services(settings=resolved_settings, database=resolved_database)
+        resolved_services = build_services(
+            settings=resolved_settings,
+            database=resolved_database,
+            metrics=resolved_metrics,
+        )
     else:
         resolved_services = services
 
@@ -52,7 +57,6 @@ def create_app(
         resolved_storage = None
 
     resolved_rate_limiter = replay_rate_limiter or build_rate_limiter(resolved_settings)
-    resolved_metrics = replay_metrics or default_metrics
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:

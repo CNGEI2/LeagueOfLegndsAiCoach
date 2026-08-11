@@ -445,3 +445,114 @@ async def test_prepare_propagates_public_errors() -> None:
             replay_token=None,
         )
     assert raised.value.code == "MATCH_EVIDENCE_UNSUPPORTED_MODE"
+
+
+@pytest.mark.asyncio
+async def test_roster_joins_by_puuid_when_match_and_timeline_order_differ() -> None:
+    from app.services.timelines.domain import BuildingKillFact, EliteMonsterKillFact
+
+    # Match roster deliberately reordered vs timeline participant IDs.
+    match = MatchSnapshot(
+        match_id=MATCH_ID,
+        platform=Platform.NA1,
+        queue_id=420,
+        game_version="16.15.602.1234",
+        started_at=NOW,
+        duration_seconds=1800,
+        participants=(
+            _participant("enemy-6", 200),
+            _participant(PUUID, 100),
+            _participant("ally-2", 100),
+        ),
+    )
+    facts = (
+        EliteMonsterKillFact(
+            fact_id="timeline:NA1:NA1_fixture:v1:frame:1:event:0",
+            kind="elite_monster_kill",
+            timestamp_ms=100_000,
+            frame_index=1,
+            event_index=0,
+            killer_id=2,
+            killer_team_id=100,
+            monster_type="DRAGON",
+            monster_sub_type="FIRE_DRAGON",
+            position=None,
+        ),
+        BuildingKillFact(
+            fact_id="timeline:NA1:NA1_fixture:v1:frame:1:event:1",
+            kind="building_kill",
+            timestamp_ms=160_000,
+            frame_index=1,
+            event_index=1,
+            killer_id=3,
+            team_id=100,
+            building_type="TOWER_BUILDING",
+            lane_type="MID_LANE",
+            tower_type="OUTER_TURRET",
+            position=None,
+        ),
+    )
+    timeline = TimelineLoadResult(
+        snapshot=TimelineSnapshot(
+            platform=Platform.NA1,
+            match_id=MATCH_ID,
+            schema_version=1,
+            frame_interval_ms=60_000,
+            participant_puuids={1: PUUID, 2: "ally-2", 3: "enemy-6"},
+            facts=facts,
+        ),
+        cache_status="miss",
+    )
+    service, _, _, _, _, _ = _service(
+        match=FakeMatchService(snapshot=match),
+        timeline=FakeTimelineService(result=timeline),
+    )
+    data = await service.prepare(
+        match_id=MATCH_ID,
+        request=JointEvidenceRequest(platform=Platform.NA1, puuid=PUUID),
+        replay_token=None,
+    )
+    assert any(window.categories == ("objective_context",) for window in data.windows)
+    assert not any(window.categories == ("building_context",) for window in data.windows)
+    monster = next(fact for fact in data.facts if fact.kind == "elite_monster_kill")
+    building = next(fact for fact in data.facts if fact.kind == "building_kill")
+    assert monster.relationship == "team_context"
+    assert building.relationship == "not_involved"
+    dumped = data.model_dump_json()
+    assert PUUID not in dumped
+    assert "enemy-6" not in dumped
+    assert "ally-2" not in dumped
+
+
+@pytest.mark.asyncio
+async def test_roster_set_mismatch_returns_safe_riot_invalid_response() -> None:
+    match = _match()
+    timeline = TimelineLoadResult(
+        snapshot=_timeline().model_copy(
+            update={"participant_puuids": {1: PUUID, 2: "ally-2", 3: "other-enemy"}}
+        ),
+        cache_status="miss",
+    )
+    service, _, _, _, _, registry = _service(
+        match=FakeMatchService(snapshot=match),
+        timeline=FakeTimelineService(result=timeline),
+    )
+    with pytest.raises(ApiError) as raised:
+        await service.prepare(
+            match_id=MATCH_ID,
+            request=JointEvidenceRequest(platform=Platform.NA1, puuid=PUUID),
+            replay_token=None,
+        )
+    assert raised.value.status_code == 502
+    assert raised.value.code == "RIOT_INVALID_RESPONSE"
+    assert raised.value.retryable is False
+    assert PUUID not in raised.value.message
+    assert "enemy-6" not in raised.value.message
+    assert "other-enemy" not in raised.value.message
+    assert "ally-2" not in raised.value.message
+    assert (
+        registry.joint_evidence_api_requests_total.value(
+            outcome="error", error_code="RIOT_INVALID_RESPONSE"
+        )
+        == 1.0
+    )

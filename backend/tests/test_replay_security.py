@@ -1,3 +1,5 @@
+import hmac
+
 import pytest
 
 from app.core.errors import ApiError
@@ -21,16 +23,38 @@ def test_verify_rejects_wrong_secret() -> None:
     assert not verify_replay_token(b"y" * 32, token, digest)
 
 
+def _assert_replay_not_found(authorization: str | None, *, required: bool = True) -> None:
+    with pytest.raises(ApiError) as raised:
+        parse_bearer_token(authorization, required=required)
+    assert raised.value.code == "REPLAY_NOT_FOUND"
+    assert raised.value.status_code == 404
+    if authorization is not None:
+        assert authorization not in raised.value.message
+
+
 def test_parse_bearer_token_accepts_valid_bearer_and_rejects_invalid() -> None:
-    assert parse_bearer_token("Bearer abc.def") == "abc.def"
+    accepted = parse_bearer_token("Bearer abc.def")
+    assert isinstance(accepted, str)
+    assert hmac.compare_digest(accepted, "abc.def")
     assert parse_bearer_token(None) is None
-    with pytest.raises(ApiError) as malformed:
-        parse_bearer_token("Basic abc", required=True)
-    assert malformed.value.code == "REPLAY_NOT_FOUND"
-    with pytest.raises(ApiError) as empty:
-        parse_bearer_token("Bearer ", required=True)
-    assert empty.value.code == "REPLAY_NOT_FOUND"
-    with pytest.raises(ApiError) as oversized:
-        parse_bearer_token("Bearer " + ("x" * 513), required=True)
-    assert oversized.value.code == "REPLAY_NOT_FOUND"
-    assert parse_bearer_token("Bearer " + ("y" * 512), required=True) == "y" * 512
+
+    _assert_replay_not_found("Basic abc")
+    _assert_replay_not_found("Bearer ")
+    _assert_replay_not_found("Bearer tok en")
+    _assert_replay_not_found("Bearer token ")
+    _assert_replay_not_found("Bearer café")
+    _assert_replay_not_found("Bearer " + ("x" * 513))
+
+    multi_byte = "é"
+    assert len(multi_byte) == 1
+    assert len(multi_byte.encode("utf-8")) == 2
+    oversized_multibyte = multi_byte * 257  # 514 bytes, 257 chars
+    assert len(oversized_multibyte) < 512
+    assert len(oversized_multibyte.encode("utf-8")) > 512
+    _assert_replay_not_found("Bearer " + oversized_multibyte)
+
+    exact = "y" * 512
+    parsed = parse_bearer_token("Bearer " + exact, required=True)
+    assert isinstance(parsed, str)
+    assert hmac.compare_digest(parsed, exact)
+    assert "Bearer " + exact not in repr(parsed)

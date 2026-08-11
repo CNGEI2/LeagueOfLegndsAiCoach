@@ -220,7 +220,9 @@ def test_evidence_authorization_rules(
         headers={"Authorization": f"Bearer {TOKEN}"},
     )
     assert linked.status_code == 200
-    assert joint.calls[-1]["replay_token"] == TOKEN
+    received = joint.calls[-1]["replay_token"]
+    assert isinstance(received, str)
+    assert __import__("hmac").compare_digest(received, TOKEN)
     assert TOKEN not in linked.text
     body = linked.json()
     assert "puuid" not in body
@@ -382,3 +384,53 @@ def test_evidence_success_body_is_strict(
     }
     assert "puuid" not in body
     assert "selected_puuid" not in body
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        "Basic not-a-bearer",
+        "Bearer ",
+        "Bearer tok en",
+        "Bearer " + ("x" * 513),
+    ],
+)
+def test_evidence_replay_bearer_rejects_malformed_empty_and_oversized(
+    evidence_client: tuple[TestClient, FakeJointEvidenceService],
+    authorization: str,
+) -> None:
+
+    client, joint = evidence_client
+    replay_id = str(uuid4())
+    response = client.post(
+        f"/api/v1/matches/{MATCH_ID}/evidence",
+        json={"platform": "NA1", "puuid": PUUID, "replay_id": replay_id},
+        headers={"Authorization": authorization},
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "REPLAY_NOT_FOUND"
+    assert joint.calls == []
+    assert authorization not in response.text
+    assert authorization not in response.json()["error"]["message"]
+
+
+def test_evidence_replay_accepts_exact_512_byte_bearer_without_leaking_token(
+    evidence_client: tuple[TestClient, FakeJointEvidenceService],
+) -> None:
+    import hmac
+
+    client, joint = evidence_client
+    token = "z" * 512
+    replay_id = str(uuid4())
+    response = client.post(
+        f"/api/v1/matches/{MATCH_ID}/evidence",
+        json={"platform": "NA1", "puuid": PUUID, "replay_id": replay_id},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert len(joint.calls) == 1
+    received = joint.calls[0]["replay_token"]
+    assert isinstance(received, str)
+    assert hmac.compare_digest(received, token)
+    assert token not in response.text
+    assert token not in repr(response.json())
