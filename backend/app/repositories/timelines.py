@@ -2,12 +2,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.errors import ApiError
 from app.core.routing import Platform
 from app.models.timeline import MatchTimelineRow
+from app.services.timelines.domain import TIMELINE_SCHEMA_VERSION, TimelineSnapshot
+from app.services.timelines.normalizer import canonical_timeline_snapshot_hash
 
 TimelineCacheStatus = Literal["available", "not_found"]
 
@@ -67,7 +71,12 @@ class SqlTimelineRepository:
         )
         async with self._session_factory() as session:
             row = (await session.execute(statement)).scalar_one_or_none()
-        return _to_record(row) if row is not None else None
+        if row is None:
+            return None
+        record = _to_record(row)
+        if record.result_status == "available":
+            _validate_available_record(record)
+        return record
 
     async def upsert(self, record: TimelineCacheRecord) -> TimelineCacheRecord:
         values = {
@@ -118,3 +127,29 @@ def _to_record(row: MatchTimelineRow) -> TimelineCacheRecord:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def _invalid_cached_timeline() -> ApiError:
+    return ApiError(
+        status_code=502,
+        code="RIOT_INVALID_RESPONSE",
+        message="Riot returned an invalid response.",
+        retryable=False,
+    )
+
+
+def _validate_available_record(record: TimelineCacheRecord) -> None:
+    if record.normalized_snapshot is None or record.snapshot_hash is None:
+        raise _invalid_cached_timeline()
+    if record.schema_version != TIMELINE_SCHEMA_VERSION:
+        raise _invalid_cached_timeline()
+    try:
+        snapshot = TimelineSnapshot.model_validate(record.normalized_snapshot)
+    except ValidationError as error:
+        raise _invalid_cached_timeline() from error
+    if snapshot.schema_version != TIMELINE_SCHEMA_VERSION:
+        raise _invalid_cached_timeline()
+    if snapshot.platform != record.platform or snapshot.match_id != record.match_id:
+        raise _invalid_cached_timeline()
+    if canonical_timeline_snapshot_hash(snapshot) != record.snapshot_hash:
+        raise _invalid_cached_timeline()

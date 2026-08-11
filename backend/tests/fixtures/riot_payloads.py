@@ -1,3 +1,5 @@
+import copy
+
 MATCH_PAYLOAD: dict[str, object] = {
     "metadata": {
         "matchId": "NA1_123456789",
@@ -147,3 +149,67 @@ TIMELINE_PAYLOAD: dict[str, object] = {
     },
     "unexpectedTopLevelField": "ignored",
 }
+
+
+def timeline_payload_for_normalizer(*, match_id: str = "NA1_fixture") -> dict[str, object]:
+    """Synthetic Timeline payload with a stable match ID for normalizer contracts."""
+    payload = copy.deepcopy(TIMELINE_PAYLOAD)
+    payload["metadata"]["matchId"] = match_id
+    return payload
+
+
+def timeline_payload_with_optional_gaps() -> dict[str, object]:
+    """Synthetic payload covering missing optional values while preserving zeros."""
+    payload = timeline_payload_for_normalizer(match_id="NA1_fixture_optional")
+    frames = payload["info"]["frames"]
+    assert isinstance(frames, list)
+    frame0 = frames[0]
+    assert isinstance(frame0, dict)
+    participant_frames = frame0["participantFrames"]
+    assert isinstance(participant_frames, dict)
+    participant_frames["1"] = {
+        "participantId": 1,
+        "level": 0,
+        "currentGold": 0,
+        "totalGold": 0,
+        "minionsKilled": 0,
+        "jungleMinionsKilled": 0,
+        "xp": 0,
+    }
+    frames[1] = {
+        "timestamp": 60_000,
+        "participantFrames": {
+            str(index): _synthetic_participant_frame(index) for index in range(1, 11)
+        },
+        "events": [
+            {
+                "type": "CHAMPION_KILL",
+                "timestamp": 61_000,
+                "killerId": 1,
+                "victimId": 6,
+                "assistingParticipantIds": [2],
+            },
+            {
+                "type": "ELITE_MONSTER_KILL",
+                "timestamp": 62_000,
+                "killerId": 2,
+                "killerTeamId": 100,
+                "monsterType": "BARON_NASHOR",
+            },
+            {
+                "type": "BUILDING_KILL",
+                "timestamp": 63_000,
+                "killerId": 3,
+                "teamId": 200,
+                "buildingType": "TOWER_BUILDING",
+            },
+            {
+                "type": "ITEM_UNDO",
+                "timestamp": 66_000,
+                "participantId": 1,
+                "beforeId": 0,
+                "afterId": 0,
+            },
+        ],
+    }
+    return payload

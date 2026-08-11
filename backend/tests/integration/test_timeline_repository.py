@@ -1,11 +1,20 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.core.errors import ApiError
 from app.core.routing import Platform
 from app.repositories.timelines import SqlTimelineRepository, TimelineCacheRecord
+from app.services.riot.dto import validate_timeline_payload
+from app.services.timelines.domain import TIMELINE_SCHEMA_VERSION
+from app.services.timelines.normalizer import TimelineNormalizer
+from tests.fixtures.riot_payloads import (
+    timeline_payload_for_normalizer,
+    timeline_payload_with_optional_gaps,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -14,15 +23,35 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def uuid_hex() -> str:
+    return uuid4().hex
+
+
+def _available_snapshot(
+    *,
+    platform: Platform = Platform.NA1,
+    match_id: str,
+    payload: dict[str, object] | None = None,
+) -> tuple[dict[str, object], str]:
+    raw = timeline_payload_for_normalizer(match_id=match_id) if payload is None else payload
+    timeline = validate_timeline_payload(raw, match_id=match_id)
+    result = TimelineNormalizer().normalize(platform=platform, timeline=timeline)
+    return result.snapshot.model_dump(mode="json"), result.snapshot_hash
+
+
 def make_record(**overrides: object) -> TimelineCacheRecord:
     now = _now()
+    match_id = str(overrides.get("match_id", "NA1_timeline_cache"))
+    platform = overrides.get("platform", Platform.NA1)
+    assert isinstance(platform, Platform)
+    snapshot, snapshot_hash = _available_snapshot(platform=platform, match_id=match_id)
     values: dict[str, object] = {
-        "platform": Platform.NA1,
-        "match_id": "NA1_timeline_cache",
+        "platform": platform,
+        "match_id": match_id,
         "result_status": "available",
-        "normalized_snapshot": {"schema_version": 1, "facts": []},
-        "schema_version": 1,
-        "snapshot_hash": "f" * 64,
+        "normalized_snapshot": snapshot,
+        "schema_version": TIMELINE_SCHEMA_VERSION,
+        "snapshot_hash": snapshot_hash,
         "fetched_at": now,
         "expires_at": now + timedelta(days=30),
         "created_at": now,
@@ -109,10 +138,13 @@ async def test_timeline_repository_isolates_same_match_id_across_platforms(
     repository = SqlTimelineRepository(session_factory)
     now = _now()
     match_id = f"SHARED_{uuid_hex()}"
+    na_snapshot, na_hash = _available_snapshot(platform=Platform.NA1, match_id=match_id)
+    euw_snapshot, euw_hash = _available_snapshot(platform=Platform.EUW1, match_id=match_id)
     na = make_record(
         platform=Platform.NA1,
         match_id=match_id,
-        snapshot_hash="1" * 64,
+        normalized_snapshot=na_snapshot,
+        snapshot_hash=na_hash,
         fetched_at=now,
         expires_at=now + timedelta(hours=1),
         created_at=now,
@@ -121,8 +153,8 @@ async def test_timeline_repository_isolates_same_match_id_across_platforms(
     euw = make_record(
         platform=Platform.EUW1,
         match_id=match_id,
-        snapshot_hash="2" * 64,
-        normalized_snapshot={"schema_version": 1, "region": "europe"},
+        normalized_snapshot=euw_snapshot,
+        snapshot_hash=euw_hash,
         fetched_at=now,
         expires_at=now + timedelta(hours=1),
         created_at=now,
@@ -134,10 +166,10 @@ async def test_timeline_repository_isolates_same_match_id_across_platforms(
 
     assert (
         await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
-    ).snapshot_hash == "1" * 64  # type: ignore[union-attr]
+    ).snapshot_hash == na_hash  # type: ignore[union-attr]
     assert (
         await repository.get_fresh(platform=Platform.EUW1, match_id=match_id, now=now)
-    ).snapshot_hash == "2" * 64  # type: ignore[union-attr]
+    ).snapshot_hash == euw_hash  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -205,9 +237,17 @@ async def test_timeline_repository_replaces_positive_and_negative_shapes(
     assert stored_negative.snapshot_hash is None
     assert stored_negative.created_at == positive.created_at
 
+    alt_payload = timeline_payload_with_optional_gaps()
+    alt_payload["metadata"]["matchId"] = match_id
+    restored_snapshot, restored_hash = _available_snapshot(
+        platform=Platform.NA1,
+        match_id=match_id,
+        payload=alt_payload,
+    )
     restored = make_record(
         match_id=match_id,
-        snapshot_hash="3" * 64,
+        normalized_snapshot=restored_snapshot,
+        snapshot_hash=restored_hash,
         fetched_at=now + timedelta(seconds=2),
         expires_at=now + timedelta(days=2),
         created_at=now + timedelta(seconds=2),
@@ -215,7 +255,7 @@ async def test_timeline_repository_replaces_positive_and_negative_shapes(
     )
     stored_restored = await repository.upsert(restored)
     assert stored_restored.result_status == "available"
-    assert stored_restored.snapshot_hash == "3" * 64
+    assert stored_restored.snapshot_hash == restored_hash
     assert stored_restored.created_at == positive.created_at
 
 
@@ -226,10 +266,18 @@ async def test_timeline_repository_concurrent_upsert_converges_without_integrity
     repository = SqlTimelineRepository(session_factory)
     now = _now()
     match_id = f"NA1_concurrent_{uuid_hex()}"
+    left_snapshot, left_hash = _available_snapshot(platform=Platform.NA1, match_id=match_id)
+    right_payload = timeline_payload_with_optional_gaps()
+    right_payload["metadata"]["matchId"] = match_id
+    right_snapshot, right_hash = _available_snapshot(
+        platform=Platform.NA1,
+        match_id=match_id,
+        payload=right_payload,
+    )
     left = make_record(
         match_id=match_id,
-        snapshot_hash="4" * 64,
-        normalized_snapshot={"side": "left"},
+        snapshot_hash=left_hash,
+        normalized_snapshot=left_snapshot,
         fetched_at=now,
         expires_at=now + timedelta(hours=1),
         created_at=now,
@@ -237,8 +285,8 @@ async def test_timeline_repository_concurrent_upsert_converges_without_integrity
     )
     right = make_record(
         match_id=match_id,
-        snapshot_hash="5" * 64,
-        normalized_snapshot={"side": "right"},
+        snapshot_hash=right_hash,
+        normalized_snapshot=right_snapshot,
         fetched_at=now + timedelta(milliseconds=1),
         expires_at=now + timedelta(hours=1),
         created_at=now + timedelta(milliseconds=1),
@@ -253,10 +301,96 @@ async def test_timeline_repository_concurrent_upsert_converges_without_integrity
     assert {result.match_id for result in results} == {match_id}
     fresh = await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
     assert fresh is not None
-    assert fresh.snapshot_hash in {"4" * 64, "5" * 64}
+    assert fresh.snapshot_hash in {left_hash, right_hash}
 
 
-def uuid_hex() -> str:
-    from uuid import uuid4
+@pytest.mark.asyncio
+async def test_timeline_repository_rejects_available_snapshot_hash_mismatch(
+    session_factory,
+) -> None:
+    repository = SqlTimelineRepository(session_factory)
+    now = _now()
+    match_id = f"NA1_bad_hash_{uuid_hex()}"
+    record = make_record(
+        match_id=match_id,
+        snapshot_hash="0" * 64,
+        fetched_at=now,
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+    )
+    await repository.upsert(record)
 
-    return uuid4().hex
+    with pytest.raises(ApiError) as error:
+        await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
+    assert error.value.code == "RIOT_INVALID_RESPONSE"
+
+
+@pytest.mark.asyncio
+async def test_timeline_repository_rejects_available_identity_mismatch(
+    session_factory,
+) -> None:
+    repository = SqlTimelineRepository(session_factory)
+    now = _now()
+    match_id = f"NA1_bad_identity_{uuid_hex()}"
+    snapshot, snapshot_hash = _available_snapshot(platform=Platform.NA1, match_id=match_id)
+    snapshot["match_id"] = f"{match_id}_other"
+    record = make_record(
+        match_id=match_id,
+        normalized_snapshot=snapshot,
+        snapshot_hash=snapshot_hash,
+        fetched_at=now,
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+    )
+    await repository.upsert(record)
+
+    with pytest.raises(ApiError) as error:
+        await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
+    assert error.value.code == "RIOT_INVALID_RESPONSE"
+
+
+@pytest.mark.asyncio
+async def test_timeline_repository_rejects_available_schema_corruption(
+    session_factory,
+) -> None:
+    repository = SqlTimelineRepository(session_factory)
+    now = _now()
+    match_id = f"NA1_bad_schema_{uuid_hex()}"
+    record = make_record(
+        match_id=match_id,
+        normalized_snapshot={"schema_version": 1, "facts": []},
+        snapshot_hash="a" * 64,
+        fetched_at=now,
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+    )
+    await repository.upsert(record)
+
+    with pytest.raises(ApiError) as error:
+        await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
+    assert error.value.code == "RIOT_INVALID_RESPONSE"
+
+
+@pytest.mark.asyncio
+async def test_timeline_repository_not_found_skips_snapshot_validation(
+    session_factory,
+) -> None:
+    repository = SqlTimelineRepository(session_factory)
+    now = _now()
+    match_id = f"NA1_not_found_ok_{uuid_hex()}"
+    negative = make_record(
+        match_id=match_id,
+        result_status="not_found",
+        normalized_snapshot=None,
+        snapshot_hash=None,
+        fetched_at=now,
+        expires_at=now + timedelta(minutes=5),
+        created_at=now,
+        updated_at=now,
+    )
+    await repository.upsert(negative)
+    loaded = await repository.get_fresh(platform=Platform.NA1, match_id=match_id, now=now)
+    assert loaded == negative
