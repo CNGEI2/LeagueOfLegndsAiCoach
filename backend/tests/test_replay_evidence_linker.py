@@ -265,6 +265,23 @@ async def test_full_partial_and_boundary_coverage_with_sorted_safe_artifacts() -
         {"selected_puuid": "other-puuid"},
         {"available_game_time_start_ms": None, "available_game_time_end_ms": None},
         {"available_game_time_start_ms": 100, "available_game_time_end_ms": 50},
+        {"normalized_duration_ms": None},
+        {"normalized_duration_ms": 0},
+        {"normalized_duration_ms": -1},
+        {"match_duration_ms": 0},
+        {"match_duration_ms": -1},
+        {"game_time_zero_ms": 1_900_000},
+        {"game_time_zero_ms": 1_900_001},
+        {
+            "available_game_time_start_ms": 0,
+            "available_game_time_end_ms": 1_800_001,
+        },
+        {
+            "normalized_duration_ms": 1_000_000,
+            "game_time_zero_ms": 1_000,
+            "available_game_time_start_ms": 0,
+            "available_game_time_end_ms": 999_001,
+        },
     ],
 )
 async def test_binding_and_invalid_coverage_map_to_replay_not_found(overrides: dict) -> None:
@@ -281,6 +298,10 @@ async def test_binding_and_invalid_coverage_map_to_replay_not_found(overrides: d
     assert raised.value.code == "REPLAY_NOT_FOUND"
     assert raised.value.status_code == 404
     assert repository.list_calls == 0
+    assert PUUID not in raised.value.message
+    assert "1_800_001" not in raised.value.message
+    assert "999_001" not in raised.value.message
+    assert "normalized" not in raised.value.message.lower()
 
 
 @pytest.mark.asyncio
@@ -390,6 +411,41 @@ async def test_second_authorization_binding_change_discards_assembled_result() -
     assert service.authorize_calls == 2
     assert repository.list_calls == 1
     assert str(artifact.id) not in repr(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        {"normalized_duration_ms": 1_850_000},
+        {"match_duration_ms": 1_700_000},
+    ],
+)
+async def test_duration_field_change_without_version_bump_discards_result(
+    mutate: dict[str, int],
+) -> None:
+    artifact = _artifact(game_time_ms=10_000)
+    changed = _row(**mutate)
+    assert changed.version == 1
+    linker, service, repository = _linker(
+        service=FakeReplayService(row=_row(), mutate_after_first=changed),
+        artifacts=[artifact],
+    )
+    with pytest.raises(ApiError) as raised:
+        await linker.link(
+            windows=(_window(start_ms=0, end_ms=20_000),),
+            replay_id=REPLAY_ID,
+            token=TOKEN,
+            platform=PLATFORM,
+            match_id=MATCH_ID,
+            selected_puuid=PUUID,
+        )
+    assert raised.value.code == "REPLAY_NOT_FOUND"
+    assert service.authorize_calls == 2
+    assert repository.list_calls == 1
+    assert str(artifact.id) not in repr(raised.value)
+    assert str(artifact.object_key) not in raised.value.message
+    assert PUUID not in raised.value.message
 
 
 def test_linked_window_contract_has_no_unsafe_fields() -> None:

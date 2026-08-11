@@ -104,7 +104,12 @@ def _raw_windows_for_fact(
     if isinstance(fact, EliteMonsterKillFact):
         if fact.killer_id == 0:
             return []
-        if fact.killer_team_id != selected_team_id:
+        killer_team = participant_team_ids.get(fact.killer_id)
+        if killer_team is None:
+            return []
+        if killer_team != fact.killer_team_id:
+            return []
+        if killer_team != selected_team_id:
             return []
         return [(fact.timestamp_ms - 20_000, fact.timestamp_ms + 10_000, "objective_context")]
 

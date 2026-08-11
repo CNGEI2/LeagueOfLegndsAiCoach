@@ -236,6 +236,53 @@ def test_items_participant_state_unrelated_and_killer_zero_create_no_windows() -
     assert plan.total_window_count == 0
 
 
+def test_objective_windows_require_roster_team_consistent_with_killer_team_id() -> None:
+    conflicting = _plan(
+        (
+            _monster(
+                fact_id="timeline:NA1:NA1_fixture:v1:frame:1:event:0",
+                timestamp_ms=100_000,
+                killer_id=ENEMY,
+                killer_team_id=TEAM,
+            ),
+        )
+    )
+    assert conflicting.windows == ()
+    assert conflicting.total_window_count == 0
+
+    missing_roster = EvidenceWindowPlanner().plan(
+        platform=PLATFORM,
+        match_id=MATCH_ID,
+        schema_version=1,
+        match_duration_ms=MATCH_DURATION,
+        selected_participant_id=SELECTED,
+        selected_team_id=TEAM,
+        participant_team_ids={SELECTED: TEAM},
+        facts=(
+            _monster(
+                fact_id="timeline:NA1:NA1_fixture:v1:frame:1:event:1",
+                timestamp_ms=120_000,
+                killer_id=2,
+                killer_team_id=TEAM,
+            ),
+        ),
+    )
+    assert missing_roster.windows == ()
+
+    ally_consistent = _plan(
+        (
+            _monster(
+                fact_id="timeline:NA1:NA1_fixture:v1:frame:1:event:2",
+                timestamp_ms=140_000,
+                killer_id=2,
+                killer_team_id=TEAM,
+            ),
+        )
+    )
+    assert len(ally_consistent.windows) == 1
+    assert ally_consistent.windows[0].categories == ("objective_context",)
+
+
 def test_windows_are_clamped_merged_sorted_and_capped() -> None:
     early = _kill(
         fact_id="timeline:NA1:NA1_fixture:v1:frame:1:event:0",

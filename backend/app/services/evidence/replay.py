@@ -30,6 +30,8 @@ class _ReplayBindingSnapshot:
     platform: str
     match_id: str
     selected_puuid: str | None
+    match_duration_ms: int
+    normalized_duration_ms: int | None
     available_game_time_start_ms: int | None
     available_game_time_end_ms: int | None
     game_time_zero_ms: int
@@ -116,12 +118,29 @@ def _validate_ready_binding(
         raise replay_not_found() from error
     if status != ReplayStatus.READY:
         raise replay_evidence_not_ready()
+
+    normalized_duration_ms = row.normalized_duration_ms
+    if normalized_duration_ms is None or normalized_duration_ms <= 0:
+        raise replay_not_found()
+    if row.match_duration_ms <= 0:
+        raise replay_not_found()
+    if row.game_time_zero_ms < 0 or row.game_time_zero_ms >= normalized_duration_ms:
+        raise replay_not_found()
+
     start = row.available_game_time_start_ms
     end = row.available_game_time_end_ms
     if start is None or end is None or start < 0 or end < 0 or start > end:
         raise replay_not_found()
-    if row.game_time_zero_ms < 0:
+    if end > row.match_duration_ms:
         raise replay_not_found()
+    try:
+        video_start = game_to_video_time(start, row.game_time_zero_ms)
+        video_end = game_to_video_time(end, row.game_time_zero_ms)
+    except ValueError as error:
+        raise replay_not_found() from error
+    if video_start > normalized_duration_ms or video_end > normalized_duration_ms:
+        raise replay_not_found()
+
     return _binding_snapshot(row)
 
 
@@ -132,6 +151,8 @@ def _binding_snapshot(row: ReplayUploadRow) -> _ReplayBindingSnapshot:
         platform=row.platform,
         match_id=row.match_id,
         selected_puuid=row.selected_puuid,
+        match_duration_ms=row.match_duration_ms,
+        normalized_duration_ms=row.normalized_duration_ms,
         available_game_time_start_ms=row.available_game_time_start_ms,
         available_game_time_end_ms=row.available_game_time_end_ms,
         game_time_zero_ms=row.game_time_zero_ms,
