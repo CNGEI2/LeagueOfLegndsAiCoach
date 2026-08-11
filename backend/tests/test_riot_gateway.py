@@ -758,6 +758,24 @@ async def test_gateway_accepts_item_undo_zero_ids_with_strict_integers() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("info", "frames", 1, "events", 1, "killerTeamId"),  # ELITE_MONSTER_KILL
+        ("info", "frames", 1, "events", 2, "teamId"),  # BUILDING_KILL
+        ("info", "frames", 0, "events", 0, "itemId"),  # ITEM_PURCHASED
+        ("info", "frames", 1, "events", 3, "itemId"),  # ITEM_SOLD
+        ("info", "frames", 1, "events", 4, "itemId"),  # ITEM_DESTROYED
+        ("info", "frames", 1, "events", 5, "beforeId"),  # ITEM_UNDO
+        ("info", "frames", 1, "events", 5, "afterId"),  # ITEM_UNDO
+    ],
+)
+async def test_gateway_rejects_negative_known_event_numeric_ids(path: tuple[object, ...]) -> None:
+    """Known-event team/item/undo IDs must be strict non-negative integers."""
+    await _reject_timeline(lambda payload: _set_path(payload, path, -1))
+
+
+@pytest.mark.asyncio
 async def test_gateway_accepts_unknown_events_with_wrong_typed_known_field_names() -> None:
     payload = copy.deepcopy(TIMELINE_PAYLOAD)
     payload["info"]["frames"][0]["events"].append(

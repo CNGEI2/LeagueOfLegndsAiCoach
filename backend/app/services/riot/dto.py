@@ -153,17 +153,17 @@ class TimelineEventDto(RiotDto):
     assisting_participant_ids: tuple[StrictTimelineInt, ...] | None = Field(
         default=None, alias="assistingParticipantIds"
     )
-    killer_team_id: StrictTimelineInt | None = Field(default=None, alias="killerTeamId")
+    killer_team_id: StrictTimelineInt | None = Field(default=None, alias="killerTeamId", ge=0)
     monster_type: str | None = Field(default=None, alias="monsterType")
     monster_sub_type: str | None = Field(default=None, alias="monsterSubType")
-    team_id: StrictTimelineInt | None = Field(default=None, alias="teamId")
+    team_id: StrictTimelineInt | None = Field(default=None, alias="teamId", ge=0)
     building_type: str | None = Field(default=None, alias="buildingType")
     lane_type: str | None = Field(default=None, alias="laneType")
     tower_type: str | None = Field(default=None, alias="towerType")
     participant_id: StrictTimelineInt | None = Field(default=None, alias="participantId")
-    item_id: StrictTimelineInt | None = Field(default=None, alias="itemId")
-    before_id: StrictTimelineInt | None = Field(default=None, alias="beforeId")
-    after_id: StrictTimelineInt | None = Field(default=None, alias="afterId")
+    item_id: StrictTimelineInt | None = Field(default=None, alias="itemId", ge=0)
+    before_id: StrictTimelineInt | None = Field(default=None, alias="beforeId", ge=0)
+    after_id: StrictTimelineInt | None = Field(default=None, alias="afterId", ge=0)
     position: TimelinePositionDto | None = None
 
     @model_validator(mode="after")
