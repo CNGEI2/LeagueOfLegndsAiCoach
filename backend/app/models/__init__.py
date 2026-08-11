@@ -4,10 +4,12 @@ from app.models.platform_detection import PlatformDetectionRow
 from app.models.player import PlayerRow
 from app.models.recent_match_cache import RecentMatchCacheRow
 from app.models.replay import ReplayArtifactRow, ReplayJobRow, ReplayUploadRow
+from app.models.timeline import MatchTimelineRow
 
 __all__ = [
     "Base",
     "MatchRow",
+    "MatchTimelineRow",
     "PlatformDetectionRow",
     "PlayerRow",
     "RecentMatchCacheRow",

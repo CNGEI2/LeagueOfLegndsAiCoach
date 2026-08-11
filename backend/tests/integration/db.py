@@ -53,7 +53,7 @@ async def session_factory(
     async with integration_engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE TABLE replay_artifacts, replay_jobs, replay_uploads, "
+                "TRUNCATE TABLE match_timelines, replay_artifacts, replay_jobs, replay_uploads, "
                 "player_platform_detections, matches, recent_match_caches, players CASCADE"
             )
         )

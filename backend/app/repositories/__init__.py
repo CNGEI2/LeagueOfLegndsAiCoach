@@ -17,6 +17,12 @@ from app.repositories.replays import (
     SqlReplayJobRepository,
     SqlReplayRepository,
 )
+from app.repositories.timelines import (
+    SqlTimelineRepository,
+    TimelineCacheRecord,
+    TimelineCacheStatus,
+    TimelineRepository,
+)
 
 __all__ = [
     "DetectionStatus",
@@ -38,4 +44,8 @@ __all__ = [
     "SqlReplayArtifactRepository",
     "SqlReplayJobRepository",
     "SqlReplayRepository",
+    "SqlTimelineRepository",
+    "TimelineCacheRecord",
+    "TimelineCacheStatus",
+    "TimelineRepository",
 ]
