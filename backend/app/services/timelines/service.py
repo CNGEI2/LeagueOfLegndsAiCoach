@@ -118,23 +118,8 @@ class TimelineService:
         self._inflight: dict[tuple[Platform, str], asyncio.Task[TimelineLoadResult]] = {}
 
     async def get_timeline(self, *, platform: Platform, match_id: str) -> TimelineLoadResult:
-        now = self._clock()
-        cached = await self._repository.get_fresh(platform=platform, match_id=match_id, now=now)
-        if cached is not None:
-            if cached.result_status == "available":
-                self._record_cache("hit")
-                self._record_request("available")
-                return TimelineLoadResult(
-                    snapshot=TimelineSnapshot.model_validate(cached.normalized_snapshot),
-                    cache_status="hit",
-                )
-            self._record_cache("not_found")
-            self._record_request("not_found")
-            raise _match_timeline_not_found()
-
-        self._record_cache("miss")
         try:
-            result = await self._load_single_flight(platform=platform, match_id=match_id)
+            result = await self._resolve_timeline(platform=platform, match_id=match_id)
         except ApiError as error:
             self._record_request(_request_outcome_for_error(error))
             raise
@@ -145,6 +130,22 @@ class TimelineService:
             raise
         self._record_request("available")
         return result
+
+    async def _resolve_timeline(self, *, platform: Platform, match_id: str) -> TimelineLoadResult:
+        now = self._clock()
+        cached = await self._repository.get_fresh(platform=platform, match_id=match_id, now=now)
+        if cached is not None:
+            if cached.result_status == "available":
+                self._record_cache("hit")
+                return TimelineLoadResult(
+                    snapshot=TimelineSnapshot.model_validate(cached.normalized_snapshot),
+                    cache_status="hit",
+                )
+            self._record_cache("not_found")
+            raise _match_timeline_not_found()
+
+        self._record_cache("miss")
+        return await self._load_single_flight(platform=platform, match_id=match_id)
 
     async def _load_single_flight(self, *, platform: Platform, match_id: str) -> TimelineLoadResult:
         key = (platform, match_id)
@@ -161,6 +162,9 @@ class TimelineService:
     async def _load_shared(self, *, platform: Platform, match_id: str) -> TimelineLoadResult:
         try:
             result = await self._load_uncached(platform=platform, match_id=match_id)
+        except asyncio.CancelledError:
+            self._record_singleflight("shared_failure")
+            raise
         except Exception:
             self._record_singleflight("shared_failure")
             raise
@@ -219,12 +223,14 @@ class TimelineService:
             ttl_seconds=self._positive_ttl_seconds,
             normalized=normalized,
         )
+        # Upstream fetch/normalize succeeded; observe before persistence so write
+        # failures still attribute latency to an available fetch outcome.
+        self._record_fetch("available", elapsed)
         try:
             await self._repository.upsert(record)
         except Exception:
             # Never invent a Timeline 404 for a persistence failure.
             raise
-        self._record_fetch("available", elapsed)
         self._record_events(normalized)
         return TimelineLoadResult(snapshot=normalized.snapshot, cache_status="miss")
 

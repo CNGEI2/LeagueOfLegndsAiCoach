@@ -36,11 +36,14 @@ class FakeTimelineRepository:
         self.get_calls: list[tuple[Platform, str, datetime]] = []
         self.upserts: list[TimelineCacheRecord] = []
         self.upsert_error: Exception | None = None
+        self.get_fresh_error: Exception | None = None
 
     async def get_fresh(
         self, *, platform: Platform, match_id: str, now: datetime
     ) -> TimelineCacheRecord | None:
         self.get_calls.append((platform, match_id, now))
+        if self.get_fresh_error is not None:
+            raise self.get_fresh_error
         record = self.records.get((platform, match_id))
         if record is None or record.expires_at <= now:
             return None
@@ -318,6 +321,45 @@ async def test_repository_write_failure_does_not_write_negative_or_fake_404() ->
     assert gateway.calls == [(Platform.NA1, "NA1_fixture")]
     assert normalizer.calls == 1
     assert repository.records == {}
+
+
+@pytest.mark.asyncio
+async def test_first_cache_read_invalid_response_is_propagated_without_fetch() -> None:
+    repository = FakeTimelineRepository()
+    repository.get_fresh_error = _api_error("RIOT_INVALID_RESPONSE", status_code=502)
+    metrics = MetricsRegistry()
+    service, repository, gateway, _ = make_service(repository=repository, metrics=metrics)
+
+    with pytest.raises(ApiError) as raised:
+        await service.get_timeline(platform=Platform.NA1, match_id="NA1_fixture")
+    assert raised.value.code == "RIOT_INVALID_RESPONSE"
+    assert gateway.calls == []
+    assert repository.upserts == []
+    assert metrics.joint_evidence_timeline_requests_total.value(outcome="invalid_response") == 1.0
+    request_total = sum(
+        value for _, value in metrics.joint_evidence_timeline_requests_total.samples()
+    )
+    assert request_total == 1.0
+    assert metrics.joint_evidence_timeline_cache_total.samples() == []
+
+
+@pytest.mark.asyncio
+async def test_first_cache_read_database_error_is_internal_error_without_fetch() -> None:
+    repository = FakeTimelineRepository()
+    repository.get_fresh_error = RuntimeError("db read failed")
+    metrics = MetricsRegistry()
+    service, repository, gateway, _ = make_service(repository=repository, metrics=metrics)
+
+    with pytest.raises(RuntimeError, match="db read failed"):
+        await service.get_timeline(platform=Platform.NA1, match_id="NA1_fixture")
+    assert gateway.calls == []
+    assert repository.upserts == []
+    assert metrics.joint_evidence_timeline_requests_total.value(outcome="internal_error") == 1.0
+    request_total = sum(
+        value for _, value in metrics.joint_evidence_timeline_requests_total.samples()
+    )
+    assert request_total == 1.0
+    assert metrics.joint_evidence_timeline_cache_total.samples() == []
 
 
 @pytest.mark.asyncio

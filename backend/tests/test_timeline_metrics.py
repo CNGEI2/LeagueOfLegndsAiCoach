@@ -11,6 +11,7 @@ from app.core.routing import Platform
 from app.services.timelines.service import TimelineService
 from tests.test_timeline_service import (
     FakeTimelineGateway,
+    FakeTimelineRepository,
     MonotonicClock,
     _api_error,
     make_service,
@@ -202,3 +203,59 @@ async def test_singleflight_waiter_and_shared_failure_metrics_use_event_barrier(
     assert metrics.joint_evidence_singleflight_total.value(result="waiter") == 1.0
     assert metrics.joint_evidence_singleflight_total.value(result="shared_failure") == 1.0
     assert metrics.joint_evidence_timeline_requests_total.value(outcome="unavailable") == 2.0
+
+
+@pytest.mark.asyncio
+async def test_shared_task_cancellation_records_shared_failure_and_allows_retry() -> None:
+    metrics = MetricsRegistry()
+    gateway = FakeTimelineGateway()
+    gateway.started = asyncio.Event()
+    gateway.release = asyncio.Event()
+    service, _, _, _ = make_service(metrics=metrics, gateway=gateway)
+
+    leader = asyncio.create_task(
+        service.get_timeline(platform=Platform.NA1, match_id="NA1_cancel_shared")
+    )
+    await gateway.started.wait()
+    shared = next(iter(service._inflight.values()))
+    shared.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader
+    assert service._inflight == {}
+    assert metrics.joint_evidence_singleflight_total.value(result="shared_failure") == 1.0
+    assert metrics.joint_evidence_timeline_requests_total.samples() == []
+    gateway.release.set()
+
+    retry = await service.get_timeline(platform=Platform.NA1, match_id="NA1_cancel_shared")
+    assert retry.cache_status == "miss"
+    assert metrics.joint_evidence_singleflight_total.value(result="leader") == 2.0
+    assert metrics.joint_evidence_singleflight_total.value(result="shared_success") == 1.0
+    assert metrics.joint_evidence_timeline_requests_total.value(outcome="available") == 1.0
+
+
+@pytest.mark.asyncio
+async def test_repository_write_failure_records_internal_error_and_available_fetch() -> None:
+    metrics = MetricsRegistry()
+    monotonic = MonotonicClock([10.0, 10.5, 11.0, 11.5])
+    repository = FakeTimelineRepository()
+    repository.upsert_error = RuntimeError("db write failed")
+    service, repository, gateway, normalizer = make_service(
+        repository=repository, metrics=metrics, monotonic=monotonic
+    )
+
+    with pytest.raises(RuntimeError, match="db write failed"):
+        await service.get_timeline(platform=Platform.NA1, match_id="NA1_fixture")
+
+    assert gateway.calls == [(Platform.NA1, "NA1_fixture")]
+    assert normalizer.calls == 1
+    assert repository.upserts == []
+    assert repository.records == {}
+    assert metrics.joint_evidence_timeline_requests_total.value(outcome="internal_error") == 1.0
+    request_total = sum(
+        value for _, value in metrics.joint_evidence_timeline_requests_total.samples()
+    )
+    assert request_total == 1.0
+    assert metrics.joint_evidence_timeline_fetch_duration_seconds.count(outcome="available") == 1
+    assert metrics.joint_evidence_timeline_fetch_duration_seconds.sum(outcome="available") == 0.5
+    assert metrics.joint_evidence_timeline_events_total.samples() == []
+    assert metrics.joint_evidence_timeline_cache_total.value(status="miss") == 1.0
