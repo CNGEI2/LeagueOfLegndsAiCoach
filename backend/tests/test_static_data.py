@@ -199,3 +199,42 @@ async def test_client_uses_unauthenticated_data_dragon_urls_and_caches_catalogs(
         "https://ddragon.leagueoflegends.com/cdn/16.15.2/data/zh_CN/item.json",
     ]
     assert all("X-Riot-Token" not in request.headers for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_hydrate_evidence_items_uses_compatible_version_and_locale() -> None:
+    catalog = await StaticDataResolver(
+        FakeStaticDataClient(versions=("16.15.2", "16.16.1"))
+    ).hydrate_evidence_items(
+        game_version="16.15.602.1234",
+        item_ids=(1055, 999999),
+        locale=Locale.ZH_CN,
+    )
+    assert catalog.static_data_status.available is False
+    assert catalog.static_data_status.version == "16.15.2"
+    assert catalog.static_data_status.code == "STATIC_DATA_UNAVAILABLE"
+    assert catalog.items[0].item_id == 1055
+    assert catalog.items[0].name == "多兰之刃"
+    assert catalog.items[0].image_url == (
+        "https://ddragon.leagueoflegends.com/cdn/16.15.2/img/item/1055.png"
+    )
+    assert catalog.items[1].item_id == 999999
+    assert catalog.items[1].name is None
+    assert catalog.items[1].image_url is None
+
+
+@pytest.mark.asyncio
+async def test_hydrate_evidence_items_degrades_without_raising_on_timeout() -> None:
+    catalog = await StaticDataResolver(TimingOutStaticDataClient()).hydrate_evidence_items(
+        game_version="16.15.602.1234",
+        item_ids=(1055,),
+        locale=Locale.EN_US,
+    )
+    assert catalog.items[0].item_id == 1055
+    assert catalog.items[0].name is None
+    assert catalog.items[0].image_url is None
+    assert catalog.static_data_status.model_dump() == {
+        "available": False,
+        "version": None,
+        "code": "STATIC_DATA_UNAVAILABLE",
+    }

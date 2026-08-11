@@ -36,7 +36,6 @@ from app.services.replays.rate_limit import (
 )
 from app.services.replays.storage.base import ReplayObjectTooLarge, ReplayStorage
 
-_MAX_TOKEN_LENGTH = 512
 _RANGE_RE = re.compile(r"^bytes=(\d+)-(\d*)$")
 
 
@@ -136,14 +135,10 @@ router = APIRouter(
 def require_replay_token(
     authorization: Annotated[str | None, Header()] = None,
 ) -> str:
-    if authorization is None:
-        raise replay_not_found()
-    parts = authorization.split(None, 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise replay_not_found()
-    token = parts[1]
-    if not token or len(token) > _MAX_TOKEN_LENGTH:
-        raise replay_not_found()
+    from app.services.replays.security import parse_bearer_token
+
+    token = parse_bearer_token(authorization, required=True)
+    assert token is not None
     return token
 
 

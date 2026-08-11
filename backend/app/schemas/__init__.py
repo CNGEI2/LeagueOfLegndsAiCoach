@@ -1,3 +1,12 @@
+from app.schemas.evidence import (
+    EvidenceArtifactReferenceResponse,
+    EvidenceWindowResponse,
+    JointEvidenceData,
+    JointEvidenceRequest,
+    JointEvidenceResponse,
+    PublicTimelineFact,
+    ReplayLinkSummary,
+)
 from app.schemas.platform_detection import (
     ConfirmationRequiredResponse,
     ConfirmPlatformRequest,
@@ -12,6 +21,13 @@ __all__ = [
     "ConfirmationRequiredResponse",
     "DetectPlayerRequest",
     "DetectPlayerResponse",
+    "EvidenceArtifactReferenceResponse",
+    "EvidenceWindowResponse",
+    "JointEvidenceData",
+    "JointEvidenceRequest",
+    "JointEvidenceResponse",
     "PlatformCandidate",
+    "PublicTimelineFact",
+    "ReplayLinkSummary",
     "ResolvedDetectionResponse",
 ]

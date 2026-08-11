@@ -29,6 +29,19 @@ class HydratedMatch:
     static_data_status: StaticDataStatus
 
 
+@dataclass(frozen=True)
+class EvidenceItem:
+    item_id: int
+    name: str | None
+    image_url: str | None
+
+
+@dataclass(frozen=True)
+class EvidenceItemCatalog:
+    items: tuple[EvidenceItem, ...]
+    static_data_status: StaticDataStatus
+
+
 class StaticDataResolver:
     def __init__(self, client: StaticDataSource) -> None:
         self._client = client
@@ -73,6 +86,28 @@ class StaticDataResolver:
         return HydratedMatch(
             snapshot=snapshot,
             participants=participants,
+            static_data_status=StaticDataStatus(
+                available=complete,
+                version=version,
+                code=None if complete else _STATIC_DATA_UNAVAILABLE,
+            ),
+        )
+
+    async def hydrate_evidence_items(
+        self, *, game_version: str, item_ids: tuple[int, ...], locale: Locale
+    ) -> EvidenceItemCatalog:
+        try:
+            version = compatible_version(game_version, await self._client.get_versions())
+            if version is None:
+                return _unhydrated_evidence_items(item_ids)
+            catalog = await self._client.get_catalog(version, locale_code(locale))
+        except (StaticDataUnavailable, TimeoutError):
+            return _unhydrated_evidence_items(item_ids)
+
+        items = tuple(_evidence_item(item_id, catalog, version) for item_id in item_ids)
+        complete = all(item.name is not None and item.image_url is not None for item in items)
+        return EvidenceItemCatalog(
+            items=items,
             static_data_status=StaticDataStatus(
                 available=complete,
                 version=version,
@@ -157,6 +192,17 @@ def _item_asset(asset: CatalogAsset | None, version: str) -> StaticAsset | None:
     )
 
 
+def _evidence_item(item_id: int, catalog: StaticCatalog, version: str) -> EvidenceItem:
+    asset = catalog.item(item_id)
+    if asset is None:
+        return EvidenceItem(item_id=item_id, name=None, image_url=None)
+    return EvidenceItem(
+        item_id=item_id,
+        name=asset.name,
+        image_url=item_image_url(version, asset.image_name),
+    )
+
+
 def _unhydrated_player(profile: PlayerProfile) -> PlayerView:
     return PlayerView(
         **profile.model_dump(),
@@ -175,6 +221,15 @@ def _unhydrated_match(snapshot: MatchSnapshot) -> HydratedMatch:
                 items=(None,) * len(participant.item_ids),
             )
             for participant in snapshot.participants
+        ),
+        static_data_status=_unavailable_status(),
+    )
+
+
+def _unhydrated_evidence_items(item_ids: tuple[int, ...]) -> EvidenceItemCatalog:
+    return EvidenceItemCatalog(
+        items=tuple(
+            EvidenceItem(item_id=item_id, name=None, image_url=None) for item_id in item_ids
         ),
         static_data_status=_unavailable_status(),
     )

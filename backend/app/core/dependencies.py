@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 import httpx2
@@ -16,6 +16,14 @@ from app.repositories.replays import (
     SqlReplayJobRepository,
     SqlReplayRepository,
 )
+from app.repositories.timelines import SqlTimelineRepository
+from app.services.evidence.replay import ReplayEvidenceLinker
+from app.services.evidence.service import (
+    DisabledJointEvidenceService,
+    JointEvidenceResolver,
+    JointEvidenceService,
+)
+from app.services.evidence.windows import EvidenceWindowPlanner
 from app.services.matches import MatchResolver, MatchService
 from app.services.platform_detection import (
     DisabledPlatformDetectionService,
@@ -33,6 +41,8 @@ from app.services.riot.client import RiotHttpClient
 from app.services.riot.gateway import RiotGateway
 from app.services.static_data.client import StaticDataClient
 from app.services.static_data.resolver import StaticDataResolver
+from app.services.timelines.normalizer import TimelineNormalizer
+from app.services.timelines.service import TimelineService
 
 
 class AsyncCloser(Protocol):
@@ -46,6 +56,9 @@ class AppServices:
     replay_service: ReplayServiceProtocol
     platform_detection_service: PlatformDetector
     closers: tuple[AsyncCloser, ...]
+    joint_evidence_service: JointEvidenceResolver = field(
+        default_factory=DisabledJointEvidenceService
+    )
 
     async def close(self) -> None:
         first_error: BaseException | None = None
@@ -104,20 +117,47 @@ def build_services(*, settings: Settings, database: Database) -> AppServices:
         )
     else:
         platform_detection_service = DisabledPlatformDetectionService()
+
+    match_service = MatchService(
+        player_service=player_service,
+        gateway=gateway,
+        recent_repository=SqlRecentMatchRepository(session_factory),
+        match_repository=SqlMatchRepository(session_factory),
+        static_resolver=static_resolver,
+        recent_cache_ttl_seconds=settings.recent_matches_cache_ttl_seconds,
+        match_retention_days=settings.match_retention_days,
+        max_concurrency=settings.riot_max_concurrency,
+    )
+
+    if settings.joint_evidence_enabled:
+        timeline_service = TimelineService(
+            gateway=gateway,
+            repository=SqlTimelineRepository(session_factory),
+            normalizer=TimelineNormalizer(),
+            metrics=default_metrics,
+            timeline_cache_ttl_seconds=settings.timeline_cache_ttl_seconds,
+            timeline_not_found_ttl_seconds=settings.timeline_not_found_ttl_seconds,
+        )
+        joint_evidence_service: JointEvidenceResolver = JointEvidenceService(
+            match_service=match_service,
+            timeline_service=timeline_service,
+            planner=EvidenceWindowPlanner(),
+            replay_linker=ReplayEvidenceLinker(
+                replay_service=replay_service,
+                artifact_repository=SqlReplayArtifactRepository(session_factory),
+            ),
+            static_resolver=static_resolver,
+            metrics=default_metrics,
+        )
+    else:
+        joint_evidence_service = DisabledJointEvidenceService()
+
     return AppServices(
         player_service=player_service,
-        match_service=MatchService(
-            player_service=player_service,
-            gateway=gateway,
-            recent_repository=SqlRecentMatchRepository(session_factory),
-            match_repository=SqlMatchRepository(session_factory),
-            static_resolver=static_resolver,
-            recent_cache_ttl_seconds=settings.recent_matches_cache_ttl_seconds,
-            match_retention_days=settings.match_retention_days,
-            max_concurrency=settings.riot_max_concurrency,
-        ),
+        match_service=match_service,
         replay_service=replay_service,
         platform_detection_service=platform_detection_service,
+        joint_evidence_service=joint_evidence_service,
         closers=(riot_raw_client, static_raw_client),
     )
 

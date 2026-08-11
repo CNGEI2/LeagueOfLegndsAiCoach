@@ -45,6 +45,10 @@ class MatchResolver(Protocol):
         self, *, platform: Platform, match_id: str, puuid: str, locale: Locale
     ) -> MatchDetailData: ...
 
+    async def get_evidence_context(
+        self, *, platform: Platform, match_id: str, puuid: str
+    ) -> MatchSnapshot: ...
+
 
 class MatchService:
     def __init__(
@@ -117,6 +121,17 @@ class MatchService:
             red_team=red_team,
             static_data_status=hydrated.static_data_status,
         )
+
+    async def get_evidence_context(
+        self, *, platform: Platform, match_id: str, puuid: str
+    ) -> MatchSnapshot:
+        snapshot = await self._load_missing_match(platform, match_id)
+        matches = sum(1 for participant in snapshot.participants if participant.puuid == puuid)
+        if matches != 1:
+            raise _player_not_in_match()
+        if snapshot.queue_id not in _ANALYSIS_QUEUES:
+            raise _unsupported_evidence_mode()
+        return snapshot
 
     async def _recent_match_ids(self, *, platform: Platform, puuid: str) -> tuple[str, ...]:
         now = self._clock()
@@ -235,5 +250,14 @@ def _unsupported_detail_mode() -> ApiError:
         status_code=422,
         code="MATCH_DETAIL_UNSUPPORTED_MODE",
         message="Match detail is not supported for this game mode.",
+        retryable=False,
+    )
+
+
+def _unsupported_evidence_mode() -> ApiError:
+    return ApiError(
+        status_code=422,
+        code="MATCH_EVIDENCE_UNSUPPORTED_MODE",
+        message="Match evidence is not supported for this game mode.",
         retryable=False,
     )

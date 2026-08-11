@@ -158,3 +158,44 @@ def test_create_app_prefers_explicitly_injected_storage_over_the_factory(tmp_pat
     )
 
     assert application.state.replay_storage is injected
+
+
+@pytest.mark.asyncio
+async def test_build_services_uses_disabled_joint_evidence_when_flag_is_off() -> None:
+    from app.services.evidence.service import DisabledJointEvidenceService, JointEvidenceService
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        riot_api_key="RGAPI-test",
+        joint_evidence_enabled=False,
+    )
+    services = build_services(settings=settings, database=_StubDatabase())  # type: ignore[arg-type]
+    try:
+        assert isinstance(services.joint_evidence_service, DisabledJointEvidenceService)
+        assert not isinstance(services.joint_evidence_service, JointEvidenceService)
+    finally:
+        await services.close()
+
+
+@pytest.mark.asyncio
+async def test_build_services_wires_joint_evidence_and_reuses_match_service() -> None:
+    from app.services.evidence.service import JointEvidenceService
+    from app.services.matches import MatchService
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        riot_api_key="RGAPI-test",
+        joint_evidence_enabled=True,
+        replay_enabled=False,
+    )
+    services = build_services(settings=settings, database=_StubDatabase())  # type: ignore[arg-type]
+    try:
+        assert isinstance(services.joint_evidence_service, JointEvidenceService)
+        assert isinstance(services.match_service, MatchService)
+        assert services.joint_evidence_service._match_service is services.match_service
+    finally:
+        await services.close()

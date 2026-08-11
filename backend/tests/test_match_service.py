@@ -508,3 +508,87 @@ async def test_match_detail_rejects_absent_player_and_nonstandard_mode(
         )
     assert unsupported.value.code == "MATCH_DETAIL_UNSUPPORTED_MODE"
     assert unsupported.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_evidence_context_requires_selected_puuid_exactly_once(
+    match_service_dependencies: MatchServiceDependencies,
+) -> None:
+    deps = match_service_dependencies
+    service = make_service(deps)
+
+    ok = await service.get_evidence_context(
+        platform=Platform.NA1, match_id="NA1_123456789", puuid="selected-puuid"
+    )
+    assert ok.match_id == "NA1_123456789"
+    assert ok.queue_id == 420
+    assert sum(1 for participant in ok.participants if participant.puuid == "selected-puuid") == 1
+
+    with pytest.raises(ApiError) as absent:
+        await service.get_evidence_context(
+            platform=Platform.NA1, match_id="NA1_123456789", puuid="absent"
+        )
+    assert absent.value.code == "PLAYER_NOT_IN_MATCH"
+    assert absent.value.status_code == 404
+    assert "absent" not in absent.value.message
+
+    duplicate = normalize_match(deps.match_dto("NA1_dup"), Platform.NA1)
+    first = duplicate.participants[0]
+    second = duplicate.participants[1].model_copy(update={"puuid": first.puuid})
+    duplicate = duplicate.model_copy(
+        update={"participants": (first, second, *duplicate.participants[2:])}
+    )
+    deps.match_repository.cached["NA1_dup"] = duplicate
+    with pytest.raises(ApiError) as raised:
+        await service.get_evidence_context(
+            platform=Platform.NA1, match_id="NA1_dup", puuid=first.puuid
+        )
+    assert raised.value.code == "PLAYER_NOT_IN_MATCH"
+    assert first.puuid not in raised.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_id", [400, 420])
+async def test_evidence_context_accepts_analysis_queues(
+    match_service_dependencies: MatchServiceDependencies, queue_id: int
+) -> None:
+    deps = match_service_dependencies
+    deps.riot_gateway.matches["NA1_123456789"] = deps.match_dto("NA1_123456789", queue_id=queue_id)
+    snapshot = await make_service(deps).get_evidence_context(
+        platform=Platform.NA1, match_id="NA1_123456789", puuid="selected-puuid"
+    )
+    assert snapshot.queue_id == queue_id
+
+
+@pytest.mark.asyncio
+async def test_evidence_context_rejects_unsupported_queue_450(
+    match_service_dependencies: MatchServiceDependencies,
+) -> None:
+    deps = match_service_dependencies
+    deps.riot_gateway.matches["NA1_123456789"] = deps.match_dto("NA1_123456789", queue_id=450)
+    with pytest.raises(ApiError) as raised:
+        await make_service(deps).get_evidence_context(
+            platform=Platform.NA1, match_id="NA1_123456789", puuid="selected-puuid"
+        )
+    assert raised.value.code == "MATCH_EVIDENCE_UNSUPPORTED_MODE"
+    assert raised.value.status_code == 422
+    assert raised.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_evidence_context_preserves_match_not_found(
+    match_service_dependencies: MatchServiceDependencies,
+) -> None:
+    deps = match_service_dependencies
+    deps.riot_gateway.match_error = ApiError(
+        status_code=404,
+        code="MATCH_NOT_FOUND",
+        message="The requested match was not found.",
+        retryable=False,
+    )
+    deps.riot_gateway.matches.clear()
+    with pytest.raises(ApiError) as raised:
+        await make_service(deps).get_evidence_context(
+            platform=Platform.NA1, match_id="NA1_missing", puuid="selected-puuid"
+        )
+    assert raised.value.code == "MATCH_NOT_FOUND"

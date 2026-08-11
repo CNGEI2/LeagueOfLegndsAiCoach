@@ -225,6 +225,22 @@ class MetricsRegistry:
             "joint_evidence_singleflight_total",
             "Timeline single-flight participation, labeled by closed-set result.",
         )
+        self.joint_evidence_windows_total = Counter(
+            "joint_evidence_windows_total",
+            "Planned evidence windows, labeled by closed-set result.",
+        )
+        self.joint_evidence_window_truncations_total = Counter(
+            "joint_evidence_window_truncations_total",
+            "Evidence window truncation outcomes, labeled by closed-set result.",
+        )
+        self.joint_evidence_replay_coverage_total = Counter(
+            "joint_evidence_replay_coverage_total",
+            "Evidence window replay coverage, labeled by closed-set coverage.",
+        )
+        self.joint_evidence_api_requests_total = Counter(
+            "joint_evidence_api_requests_total",
+            "Joint evidence API requests, labeled by closed-set outcome and error_code.",
+        )
 
     def render_prometheus_text(self) -> str:
         lines: list[str] = []
@@ -240,6 +256,10 @@ class MetricsRegistry:
             self.joint_evidence_timeline_cache_total,
             self.joint_evidence_timeline_events_total,
             self.joint_evidence_singleflight_total,
+            self.joint_evidence_windows_total,
+            self.joint_evidence_window_truncations_total,
+            self.joint_evidence_replay_coverage_total,
+            self.joint_evidence_api_requests_total,
         ):
             lines.append(f"# HELP {counter.name} {counter.description}")
             lines.append(f"# TYPE {counter.name} counter")
