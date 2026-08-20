@@ -502,6 +502,12 @@ export const evidenceWindowSchema = z
       });
     }
     const offset = videoStart - coveredStart;
+    if (offset < 0) {
+      context.addIssue({
+        code: "custom",
+        message: "game-to-video offset must be >= 0",
+      });
+    }
     if (videoEnd - coveredEnd !== offset) {
       context.addIssue({
         code: "custom",

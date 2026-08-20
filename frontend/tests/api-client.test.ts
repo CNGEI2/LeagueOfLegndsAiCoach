@@ -869,6 +869,68 @@ describe("joint evidence schemas and prepareMatchEvidence", () => {
     ).toBe(true);
   });
 
+  it("rejects a negative game-to-video offset", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              video_start_ms: 47_000,
+              video_end_ms: 67_000,
+              artifacts: [],
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects a negative game-to-video offset even when window and artifacts share it", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              video_start_ms: 47_000,
+              video_end_ms: 67_000,
+              artifacts: [
+                {
+                  artifact_id: EVIDENCE_ARTIFACT_ID,
+                  kind: "verification_frame",
+                  game_time_ms: 60_000,
+                  video_time_ms: 59_000,
+                },
+              ],
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("accepts a zero game-to-video offset", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              video_start_ms: 48_000,
+              video_end_ms: 68_000,
+              artifacts: [
+                {
+                  artifact_id: EVIDENCE_ARTIFACT_ID,
+                  kind: "verification_frame",
+                  game_time_ms: 60_000,
+                  video_time_ms: 60_000,
+                },
+              ],
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
   it("does not compare game-to-video offsets on unavailable windows", () => {
     expect(
       jointEvidenceResponseSchema.safeParse(
