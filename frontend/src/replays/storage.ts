@@ -1,7 +1,9 @@
 import { z } from "zod";
 
+import { replayStatusSchema, type ReplayStatus } from "@/api/schemas";
+
 const CAPABILITY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const STORAGE_KEY_PREFIX = "lol-ai-coach:replay:";
+export const STORAGE_KEY_PREFIX = "lol-ai-coach:replay:";
 
 const replayCapabilitySchema = z
   .object({
@@ -9,8 +11,16 @@ const replayCapabilitySchema = z
     accessToken: z.string().min(1),
     matchId: z.string().min(1),
     updatedAt: z.string().datetime({ offset: true }),
+    status: replayStatusSchema.nullable().optional(),
   })
-  .strict();
+  .strict()
+  .transform((value) => ({
+    replayId: value.replayId,
+    accessToken: value.accessToken,
+    matchId: value.matchId,
+    updatedAt: value.updatedAt,
+    status: value.status ?? null,
+  }));
 
 export type ReplayCapability = z.infer<typeof replayCapabilitySchema>;
 
@@ -19,6 +29,7 @@ export type ReplayCapabilityInput = {
   accessToken: string;
   matchId: string;
   updatedAt: string;
+  status?: ReplayStatus | null;
   puuid?: unknown;
   fileName?: unknown;
   uploadUrl?: unknown;
@@ -34,6 +45,7 @@ export function saveReplayCapability(input: ReplayCapabilityInput): void {
     accessToken: input.accessToken,
     matchId: input.matchId,
     updatedAt: input.updatedAt,
+    status: input.status ?? null,
   };
   localStorage.setItem(storageKey(capability.replayId), JSON.stringify(capability));
 }
@@ -68,4 +80,23 @@ export function loadReplayCapability(replayId: string): ReplayCapability | null 
 
 export function removeReplayCapability(replayId: string): void {
   localStorage.removeItem(storageKey(replayId));
+}
+
+export function findReplayCapabilityForMatch(
+  matchId: string,
+  requiredStatus?: ReplayStatus,
+): ReplayCapability | null {
+  let best: ReplayCapability | null = null;
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key?.startsWith(STORAGE_KEY_PREFIX)) continue;
+    const replayId = key.slice(STORAGE_KEY_PREFIX.length);
+    const capability = loadReplayCapability(replayId);
+    if (!capability || capability.matchId !== matchId) continue;
+    if (requiredStatus !== undefined && capability.status !== requiredStatus) continue;
+    if (!best || Date.parse(capability.updatedAt) > Date.parse(best.updatedAt)) {
+      best = capability;
+    }
+  }
+  return best;
 }

@@ -3,6 +3,7 @@ import type { z } from "zod";
 import {
   detectPlayerResponseSchema,
   errorResponseSchema,
+  jointEvidenceResponseSchema,
   matchDetailResponseSchema,
   type Platform,
   recentMatchesResponseSchema,
@@ -240,6 +241,32 @@ export async function getReplayArtifacts(input: ReplayAuthInput, signal?: AbortS
     `/api/v1/replays/${encodeURIComponent(input.replayId)}/artifacts`,
     replayArtifactsResponseSchema,
     { token: input.accessToken, signal },
+  );
+}
+
+export type PrepareMatchEvidenceInput = {
+  matchId: string;
+  platform: Platform;
+  puuid: string;
+  locale: Locale;
+  replay?: { replayId: string; accessToken: string };
+};
+
+export async function prepareMatchEvidence(input: PrepareMatchEvidenceInput, signal?: AbortSignal) {
+  return request(
+    `/api/v1/matches/${encodeURIComponent(input.matchId)}/evidence`,
+    jointEvidenceResponseSchema,
+    {
+      method: "POST",
+      body: {
+        platform: input.platform,
+        puuid: input.puuid,
+        locale: input.locale,
+        replay_id: input.replay?.replayId ?? null,
+      },
+      token: input.replay?.accessToken,
+      signal,
+    },
   );
 }
 

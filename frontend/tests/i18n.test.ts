@@ -73,3 +73,102 @@ describe("message catalogs", () => {
     expect(zh.confirmationExpired).toMatch(/过期/);
   });
 });
+
+describe("joint evidence bilingual keys", () => {
+  const coachingLeakPattern =
+    /mistake|good play|bad play|score|blame|awareness|mechanics|intent|caused by|therefore|失误|好操作|坏操作|评分|指责|意识|操作|意图|导致|因此/i;
+
+  const requiredKeys = [
+    "prepareEvidence",
+    "preparingEvidence",
+    "evidenceEmpty",
+    "evidenceOnlyScopeNotice",
+    "factKindChampionKill",
+    "factKindEliteMonsterKill",
+    "factKindBuildingKill",
+    "factKindItemPurchased",
+    "factKindItemSold",
+    "factKindItemDestroyed",
+    "factKindItemUndo",
+    "factKindParticipantState",
+    "relationshipKiller",
+    "relationshipVictim",
+    "relationshipAssistant",
+    "relationshipActor",
+    "relationshipTeamContext",
+    "relationshipNotInvolved",
+    "categoryCombatContext",
+    "categoryDeathContext",
+    "categoryObjectiveContext",
+    "categoryBuildingContext",
+    "coverageFull",
+    "coveragePartial",
+    "coverageUnavailable",
+    "evidenceTimelineOnly",
+    "evidenceLinkedFrames",
+    "retry",
+    "matchEvidenceUnsupportedMode",
+    "matchTimelineNotFound",
+    "replayEvidenceNotReady",
+    "replayNotFound",
+    "matchNotFound",
+    "playerNotInMatch",
+    "riotAuthFailed",
+    "riotRateLimited",
+    "riotUnavailable",
+    "riotRequestInvalid",
+  ] as const;
+
+  it("includes prepare, loading, empty, notice, facts, relationships, categories, coverage, linkage, retry, and J1 errors", () => {
+    const en = getMessages("en-US") as Record<string, string>;
+    const zh = getMessages("zh-CN") as Record<string, string>;
+
+    for (const key of requiredKeys) {
+      expect(en[key], `missing en key ${key}`).toEqual(expect.any(String));
+      expect(en[key]!.length).toBeGreaterThan(0);
+      expect(zh[key], `missing zh key ${key}`).toEqual(expect.any(String));
+      expect(zh[key]!.length).toBeGreaterThan(0);
+    }
+
+    expect(en.prepareEvidence.toLowerCase()).toMatch(/prepare.*timeline evidence|timeline evidence/);
+    expect(zh.prepareEvidence).toMatch(/准备.*时间线证据|时间线证据/);
+    expect(en.preparingEvidence.toLowerCase()).toMatch(/preparing|loading/);
+    expect(en.evidenceEmpty.toLowerCase()).toMatch(/no .*evidence|empty/);
+    expect(en.evidenceOnlyScopeNotice.toLowerCase()).toMatch(/no ai coaching|evidence only|not.*coaching/);
+    expect(en.evidenceTimelineOnly.toLowerCase()).toMatch(/timeline/);
+    expect(en.evidenceLinkedFrames.toLowerCase()).toMatch(/linked|frame/);
+    expect(en.coverageFull.toLowerCase()).toMatch(/full/);
+    expect(en.coveragePartial.toLowerCase()).toMatch(/partial/);
+    expect(en.coverageUnavailable.toLowerCase()).toMatch(/unavailable/);
+    expect(en.matchEvidenceUnsupportedMode.toLowerCase()).toMatch(/not supported|unsupported/);
+    expect(en.matchTimelineNotFound.toLowerCase()).toMatch(/timeline/);
+    expect(en.replayEvidenceNotReady.toLowerCase()).toMatch(/not ready|ready/);
+  });
+
+  it("keeps English and Chinese joint-evidence copy free of coaching conclusions", () => {
+    const en = getMessages("en-US") as Record<string, string>;
+    const zh = getMessages("zh-CN") as Record<string, string>;
+
+    for (const key of requiredKeys) {
+      expect(en[key], `missing en key ${key}`).toEqual(expect.any(String));
+      expect(zh[key], `missing zh key ${key}`).toEqual(expect.any(String));
+      expect(en[key]).not.toMatch(coachingLeakPattern);
+      expect(zh[key]).not.toMatch(coachingLeakPattern);
+    }
+  });
+
+  it("spot-checks Chinese values are nonempty for core evidence labels", () => {
+    const zh = getMessages("zh-CN") as Record<string, string>;
+    for (const key of [
+      "prepareEvidence",
+      "evidenceOnlyScopeNotice",
+      "factKindChampionKill",
+      "categoryCombatContext",
+      "coveragePartial",
+      "replayEvidenceNotReady",
+    ] as const) {
+      expect(zh[key], `missing zh key ${key}`).toEqual(expect.any(String));
+      expect(zh[key]!.trim().length).toBeGreaterThan(0);
+    }
+  });
+});

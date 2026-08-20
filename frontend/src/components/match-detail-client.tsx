@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ApiClientError, getMatchDetail } from "@/api/client";
 import type { MatchDetailResponse, Platform } from "@/api/schemas";
 import { DataState } from "@/components/data-state";
+import { EvidenceSection } from "@/components/evidence-section";
 import { MatchTeamTable } from "@/components/match-team-table";
 import { ReplaySection } from "@/components/replay-section";
 import type { Locale } from "@/i18n/locales";
@@ -157,6 +158,12 @@ export function MatchDetailClient({
         puuid={data.selected_puuid}
         platform={data.platform}
         matchDurationSeconds={data.duration_seconds}
+      />
+      <EvidenceSection
+        locale={locale}
+        matchId={data.match_id}
+        puuid={data.selected_puuid}
+        platform={data.platform}
       />
     </main>
   );

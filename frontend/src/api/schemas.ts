@@ -271,6 +271,208 @@ export const replayArtifactsResponseSchema = z
   })
   .strict();
 
+export const evidenceRelationshipSchema = z.enum([
+  "killer",
+  "victim",
+  "assistant",
+  "actor",
+  "team_context",
+  "not_involved",
+]);
+
+const evidenceFactBaseSchema = {
+  fact_id: z.string(),
+  timestamp_ms: z.number().int(),
+  relationship: evidenceRelationshipSchema,
+};
+
+export const championKillFactSchema = z
+  .object({
+    ...evidenceFactBaseSchema,
+    kind: z.literal("champion_kill"),
+    killer_id: z.number().int(),
+    victim_id: z.number().int(),
+    assisting_participant_ids: z.array(z.number().int()),
+    position_x: z.number().int().nullable(),
+    position_y: z.number().int().nullable(),
+  })
+  .strict();
+
+export const eliteMonsterKillFactSchema = z
+  .object({
+    ...evidenceFactBaseSchema,
+    kind: z.literal("elite_monster_kill"),
+    killer_id: z.number().int(),
+    killer_team_id: z.number().int(),
+    monster_type: z.string(),
+    monster_sub_type: z.string().nullable(),
+    position_x: z.number().int().nullable(),
+    position_y: z.number().int().nullable(),
+  })
+  .strict();
+
+export const buildingKillFactSchema = z
+  .object({
+    ...evidenceFactBaseSchema,
+    kind: z.literal("building_kill"),
+    killer_id: z.number().int(),
+    team_id: z.number().int(),
+    building_type: z.string(),
+    lane_type: z.string().nullable(),
+    tower_type: z.string().nullable(),
+    position_x: z.number().int().nullable(),
+    position_y: z.number().int().nullable(),
+  })
+  .strict();
+
+export const itemPurchasedFactSchema = z
+  .object({
+    ...evidenceFactBaseSchema,
+    kind: z.literal("item_purchased"),
+    participant_id: z.number().int(),
+    item_id: z.number().int(),
+    item_name: z.string().nullable(),
+    item_image_url: z.string().url().nullable(),
+  })
+  .strict();
+
+export const itemSoldFactSchema = z
+  .object({
+    ...evidenceFactBaseSchema,
+    kind: z.literal("item_sold"),
+    participant_id: z.number().int(),
+    item_id: z.number().int(),
+    item_name: z.string().nullable(),
+    item_image_url: z.string().url().nullable(),
+  })
+  .strict();
+
+export const itemDestroyedFactSchema = z
+  .object({
+    ...evidenceFactBaseSchema,
+    kind: z.literal("item_destroyed"),
+    participant_id: z.number().int(),
+    item_id: z.number().int(),
+    item_name: z.string().nullable(),
+    item_image_url: z.string().url().nullable(),
+  })
+  .strict();
+
+export const itemUndoFactSchema = z
+  .object({
+    ...evidenceFactBaseSchema,
+    kind: z.literal("item_undo"),
+    participant_id: z.number().int(),
+    before_id: z.number().int(),
+    after_id: z.number().int(),
+    before_item_name: z.string().nullable(),
+    before_item_image_url: z.string().url().nullable(),
+    after_item_name: z.string().nullable(),
+    after_item_image_url: z.string().url().nullable(),
+  })
+  .strict();
+
+export const participantStateFactSchema = z
+  .object({
+    ...evidenceFactBaseSchema,
+    kind: z.literal("participant_state"),
+    participant_id: z.number().int(),
+    level: z.number().int(),
+    current_gold: z.number().int(),
+    total_gold: z.number().int(),
+    minions_killed: z.number().int(),
+    jungle_minions_killed: z.number().int(),
+    xp: z.number().int(),
+    position_x: z.number().int().nullable(),
+    position_y: z.number().int().nullable(),
+  })
+  .strict();
+
+export const timelineFactSchema = z.discriminatedUnion("kind", [
+  championKillFactSchema,
+  eliteMonsterKillFactSchema,
+  buildingKillFactSchema,
+  itemPurchasedFactSchema,
+  itemSoldFactSchema,
+  itemDestroyedFactSchema,
+  itemUndoFactSchema,
+  participantStateFactSchema,
+]);
+
+export const evidenceCategorySchema = z.enum([
+  "combat_context",
+  "death_context",
+  "objective_context",
+  "building_context",
+]);
+
+export const evidenceCoverageSchema = z.enum(["full", "partial", "unavailable"]);
+
+export const evidenceArtifactReferenceSchema = z
+  .object({
+    artifact_id: z.string().uuid(),
+    kind: replayArtifactKindSchema,
+    game_time_ms: z.number().int(),
+    video_time_ms: z.number().int(),
+  })
+  .strict();
+
+export const evidenceWindowSchema = z
+  .object({
+    window_id: z.string(),
+    start_ms: z.number().int(),
+    end_ms: z.number().int(),
+    categories: z.array(evidenceCategorySchema),
+    trigger_fact_ids: z.array(z.string()),
+    coverage: evidenceCoverageSchema,
+    covered_game_start_ms: z.number().int().nullable(),
+    covered_game_end_ms: z.number().int().nullable(),
+    video_start_ms: z.number().int().nullable(),
+    video_end_ms: z.number().int().nullable(),
+    artifacts: z.array(evidenceArtifactReferenceSchema),
+  })
+  .strict()
+  .refine((window) => window.end_ms >= window.start_ms, {
+    message: "end_ms must be >= start_ms",
+  })
+  .refine(
+    (window) => {
+      if (window.covered_game_start_ms !== null && window.covered_game_end_ms !== null) {
+        return window.covered_game_end_ms >= window.covered_game_start_ms;
+      }
+      return true;
+    },
+    { message: "covered_game_end_ms must be >= covered_game_start_ms" },
+  );
+
+export const replayLinkSummarySchema = z
+  .object({
+    status: z.literal("linked"),
+    full_count: z.number().int(),
+    partial_count: z.number().int(),
+    unavailable_count: z.number().int(),
+  })
+  .strict();
+
+export const jointEvidenceResponseSchema = z
+  .object({
+    status: z.literal("ready"),
+    platform: platformSchema,
+    match_id: z.string(),
+    locale: localeSchema,
+    schema_version: z.literal(1),
+    facts: z.array(timelineFactSchema),
+    windows: z.array(evidenceWindowSchema),
+    timeline_cache_status: z.enum(["hit", "miss"]),
+    replay_link: replayLinkSummarySchema.nullable(),
+    static_data_status: staticDataStatusSchema,
+    truncated: z.boolean(),
+    total_window_count: z.number().int(),
+    scope_notice_code: z.literal("EVIDENCE_ONLY_NO_COACHING"),
+    request_id: requestIdSchema,
+  })
+  .strict();
+
 export type PlayerProfile = z.infer<typeof playerProfileSchema>;
 export type HydratedParticipant = z.infer<typeof hydratedParticipantSchema>;
 export type RecentMatchItem = z.infer<typeof recentMatchItemSchema>;
@@ -280,9 +482,16 @@ export type PlatformCandidate = z.infer<typeof platformCandidateSchema>;
 export type ResolvedDetectionResponse = z.infer<typeof resolvedDetectionResponseSchema>;
 export type ConfirmationRequiredResponse = z.infer<typeof confirmationRequiredResponseSchema>;
 export type DetectPlayerResponse = z.infer<typeof detectPlayerResponseSchema>;
+export type ReplayStatus = z.infer<typeof replayStatusSchema>;
 export type ReplayCreateResponse = z.infer<typeof replayCreateResponseSchema>;
 export type ReplayStatusResponse = z.infer<typeof replayStatusResponseSchema>;
 export type ReplayArtifactKind = z.infer<typeof replayArtifactKindSchema>;
 export type ReplayArtifactAccess = z.infer<typeof replayArtifactAccessSchema>;
 export type ReplayArtifact = z.infer<typeof replayArtifactSchema>;
 export type ReplayArtifactsResponse = z.infer<typeof replayArtifactsResponseSchema>;
+export type EvidenceRelationship = z.infer<typeof evidenceRelationshipSchema>;
+export type TimelineFact = z.infer<typeof timelineFactSchema>;
+export type EvidenceArtifactReference = z.infer<typeof evidenceArtifactReferenceSchema>;
+export type EvidenceWindow = z.infer<typeof evidenceWindowSchema>;
+export type ReplayLinkSummary = z.infer<typeof replayLinkSummarySchema>;
+export type JointEvidenceResponse = z.infer<typeof jointEvidenceResponseSchema>;

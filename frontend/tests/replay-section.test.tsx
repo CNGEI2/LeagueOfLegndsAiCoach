@@ -474,7 +474,7 @@ describe("ReplaySection upload polling and refresh recovery", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     getReplayStatusMock.mockResolvedValue(
       statusResponse({
@@ -505,7 +505,7 @@ describe("ReplaySection upload polling and refresh recovery", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
 
     let call = 0;
@@ -563,7 +563,7 @@ describe("ReplaySection upload polling and refresh recovery", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
 
@@ -629,7 +629,7 @@ describe("ReplaySection status, delete, and token errors", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     getReplayStatusMock.mockResolvedValue(
       statusResponse({
@@ -653,7 +653,7 @@ describe("ReplaySection status, delete, and token errors", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     getReplayStatusMock.mockResolvedValue(
       statusResponse({
@@ -686,7 +686,7 @@ describe("ReplaySection status, delete, and token errors", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     getReplayStatusMock.mockResolvedValue(statusResponse({ status: "expired", progress_percent: 0 }));
 
@@ -703,7 +703,7 @@ describe("ReplaySection status, delete, and token errors", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     getReplayStatusMock.mockResolvedValue(
       statusResponse({
@@ -738,7 +738,7 @@ describe("ReplaySection status, delete, and token errors", () => {
       replayId: REPLAY_ID,
       accessToken: "bad-token",
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     getReplayStatusMock.mockRejectedValue(
       new ApiClientError("REPLAY_NOT_FOUND", {}, false, SAFE_REQUEST_ID),
@@ -794,7 +794,7 @@ describe("ReplaySection accessibility and bilingual copy", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     getReplayStatusMock.mockResolvedValue(
       statusResponse({
@@ -846,7 +846,7 @@ describe("ReplaySection accessibility and bilingual copy", () => {
       replayId: REPLAY_ID,
       accessToken: TOKEN,
       matchId: MATCH_ID,
-      updatedAt: "2026-08-01T15:00:00.000Z",
+      updatedAt: new Date().toISOString(),
     });
     cleanup();
     renderSection("zh-CN");

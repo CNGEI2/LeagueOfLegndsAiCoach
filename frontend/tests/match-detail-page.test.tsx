@@ -53,6 +53,28 @@ vi.mock("@/components/replay-section", () => ({
   ),
 }));
 
+vi.mock("@/components/evidence-section", () => ({
+  EvidenceSection: ({
+    matchId,
+    puuid,
+    platform,
+    locale,
+  }: {
+    matchId: string;
+    puuid: string;
+    platform: string;
+    locale: string;
+  }) => (
+    <section
+      data-testid="evidence-section"
+      data-match-id={matchId}
+      data-puuid={puuid}
+      data-platform={platform}
+      data-locale={locale}
+    />
+  ),
+}));
+
 import MatchDetailPage from "@/app/[locale]/matches/[matchId]/page";
 import { ApiClientError, getMatchDetail } from "@/api/client";
 import type { MatchDetailResponse, Platform } from "@/api/schemas";
@@ -149,6 +171,13 @@ describe("MatchDetailClient", () => {
     expect(replay).toHaveAttribute("data-platform", "NA1");
     expect(replay).toHaveAttribute("data-locale", "en-US");
     expect(replay).toHaveAttribute("data-duration", "1800");
+
+    const evidence = screen.getByTestId("evidence-section");
+    expect(evidence).toHaveAttribute("data-match-id", "NA1_123456789");
+    expect(evidence).toHaveAttribute("data-puuid", "selected-puuid");
+    expect(evidence).toHaveAttribute("data-platform", "NA1");
+    expect(evidence).toHaveAttribute("data-locale", "en-US");
+    expect(replay.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("keeps internal participant IDs private and uses stable team-local labels", async () => {
@@ -222,6 +251,7 @@ describe("MatchDetailClient", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("This player is not in the match data.");
     expect(screen.queryByTestId("replay-section")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("evidence-section")).not.toBeInTheDocument();
   });
 
   it("does not show support details for a sanitized request ID on local player validation", async () => {
@@ -287,6 +317,13 @@ describe("MatchDetailClient platform propagation", () => {
         expect.any(AbortSignal),
       );
       expect(screen.getByTestId("replay-section")).toHaveAttribute("data-platform", platform);
+      expect(screen.getByTestId("evidence-section")).toHaveAttribute("data-platform", platform);
+      expect(screen.getByTestId("evidence-section")).toHaveAttribute(
+        "data-match-id",
+        `${platform}_123456789`,
+      );
+      expect(screen.getByTestId("evidence-section")).toHaveAttribute("data-puuid", "selected-puuid");
+      expect(screen.getByTestId("evidence-section")).toHaveAttribute("data-locale", "en-US");
       expect(screen.queryByText("NA1")).not.toBeInTheDocument();
     },
   );

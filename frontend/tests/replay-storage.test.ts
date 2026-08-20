@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  findReplayCapabilityForMatch,
   loadReplayCapability,
   removeReplayCapability,
   saveReplayCapability,
@@ -55,6 +56,7 @@ describe("replay capability storage", () => {
       accessToken: "secret-token",
       matchId: "NA1_123",
       updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
       puuid: "should-not-persist",
       fileName: "recording.mp4",
       uploadUrl: "https://s3.example/upload",
@@ -67,12 +69,14 @@ describe("replay capability storage", () => {
       "accessToken",
       "matchId",
       "replayId",
+      "status",
       "updatedAt",
     ]);
     expect(parsed).not.toHaveProperty("puuid");
     expect(parsed).not.toHaveProperty("fileName");
     expect(parsed).not.toHaveProperty("uploadUrl");
     expect(parsed.accessToken).toBe("secret-token");
+    expect(parsed.status).toBe("ready");
   });
 
   it("loads a valid capability", () => {
@@ -81,6 +85,7 @@ describe("replay capability storage", () => {
       accessToken: "secret-token",
       matchId: "NA1_123",
       updatedAt: "2026-08-01T14:00:00.000Z",
+      status: "ready",
     });
 
     expect(loadReplayCapability(REPLAY_ID)).toEqual({
@@ -88,6 +93,119 @@ describe("replay capability storage", () => {
       accessToken: "secret-token",
       matchId: "NA1_123",
       updatedAt: "2026-08-01T14:00:00.000Z",
+      status: "ready",
+    });
+  });
+
+  it("loads a legacy capability without status as status null while keeping the token", () => {
+    memoryStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        replayId: REPLAY_ID,
+        accessToken: "legacy-token",
+        matchId: "NA1_123",
+        updatedAt: "2026-08-01T14:00:00.000Z",
+      }),
+    );
+
+    expect(loadReplayCapability(REPLAY_ID)).toEqual({
+      replayId: REPLAY_ID,
+      accessToken: "legacy-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T14:00:00.000Z",
+      status: null,
+    });
+  });
+
+  it("persists ready status when saving with status", () => {
+    saveReplayCapability({
+      replayId: REPLAY_ID,
+      accessToken: "secret-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
+    });
+
+    expect(loadReplayCapability(REPLAY_ID)?.status).toBe("ready");
+  });
+
+  it("findReplayCapabilityForMatch returns the newest capability by updatedAt", () => {
+    const olderId = "aaaaaaaa-bbbb-4ccc-8ddd-111111111111";
+    const newerId = "aaaaaaaa-bbbb-4ccc-8ddd-222222222222";
+    saveReplayCapability({
+      replayId: olderId,
+      accessToken: "older-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T14:00:00.000Z",
+      status: "ready",
+    });
+    saveReplayCapability({
+      replayId: newerId,
+      accessToken: "newer-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "queued",
+    });
+    saveReplayCapability({
+      replayId: REPLAY_ID,
+      accessToken: "other-match-token",
+      matchId: "NA1_999",
+      updatedAt: "2026-08-01T16:00:00.000Z",
+      status: "ready",
+    });
+
+    expect(findReplayCapabilityForMatch("NA1_123")).toEqual({
+      replayId: newerId,
+      accessToken: "newer-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "queued",
+    });
+  });
+
+  it("findReplayCapabilityForMatch with ready skips null and non-ready statuses", () => {
+    const legacyId = "aaaaaaaa-bbbb-4ccc-8ddd-333333333333";
+    const queuedId = "aaaaaaaa-bbbb-4ccc-8ddd-444444444444";
+    const olderReadyId = "aaaaaaaa-bbbb-4ccc-8ddd-555555555555";
+    const newestReadyId = "aaaaaaaa-bbbb-4ccc-8ddd-666666666666";
+
+    memoryStorage.setItem(
+      `lol-ai-coach:replay:${legacyId}`,
+      JSON.stringify({
+        replayId: legacyId,
+        accessToken: "legacy-token",
+        matchId: "NA1_123",
+        updatedAt: "2026-08-01T16:00:00.000Z",
+      }),
+    );
+    saveReplayCapability({
+      replayId: queuedId,
+      accessToken: "queued-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T15:30:00.000Z",
+      status: "queued",
+    });
+    saveReplayCapability({
+      replayId: olderReadyId,
+      accessToken: "older-ready-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T14:00:00.000Z",
+      status: "ready",
+    });
+    saveReplayCapability({
+      replayId: newestReadyId,
+      accessToken: "newest-ready-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
+    });
+
+    expect(findReplayCapabilityForMatch("NA1_123", "ready")).toEqual({
+      replayId: newestReadyId,
+      accessToken: "newest-ready-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
     });
   });
 

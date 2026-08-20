@@ -19,14 +19,13 @@ import { ReplayUploadForm, type ReplayUploadSubmit } from "@/components/replay-u
 import type { Locale } from "@/i18n/locales";
 import { getMessages, type Messages } from "@/i18n/messages";
 import {
-  loadReplayCapability,
+  findReplayCapabilityForMatch,
   removeReplayCapability,
   saveReplayCapability,
   type ReplayCapability,
 } from "@/replays/storage";
 
 const RIGHTS_STATEMENT_VERSION = "2026-08-01";
-const STORAGE_KEY_PREFIX = "lol-ai-coach:replay:";
 const ACTIVE_POLL_MS = 2000;
 const HIDDEN_POLL_MS = 10000;
 const BACKOFF_BASE_MS = 2000;
@@ -39,21 +38,6 @@ const TERMINAL_STATUSES = new Set(["ready", "failed", "deleted", "expired"]);
 export function nextPollBackoffMs(previousBackoffMs: number, hidden: boolean): number {
   const base = hidden ? HIDDEN_POLL_MS : BACKOFF_BASE_MS;
   return previousBackoffMs === 0 ? base : Math.min(previousBackoffMs * 2, BACKOFF_MAX_MS);
-}
-
-function findCapabilityForMatch(matchId: string): ReplayCapability | null {
-  let best: ReplayCapability | null = null;
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (!key?.startsWith(STORAGE_KEY_PREFIX)) continue;
-    const replayId = key.slice(STORAGE_KEY_PREFIX.length);
-    const capability = loadReplayCapability(replayId);
-    if (!capability || capability.matchId !== matchId) continue;
-    if (!best || Date.parse(capability.updatedAt) > Date.parse(best.updatedAt)) {
-      best = capability;
-    }
-  }
-  return best;
 }
 
 function messageForReplayError(code: string | undefined, messages: Messages): string {
@@ -117,7 +101,7 @@ export function ReplaySection({
   void matchDurationSeconds;
   const [activeMatchId, setActiveMatchId] = useState(matchId);
   const [capability, setCapability] = useState<ReplayCapability | null>(() =>
-    findCapabilityForMatch(matchId),
+    findReplayCapabilityForMatch(matchId),
   );
   const [status, setStatus] = useState<ReplayStatusResponse | null>(null);
   const [artifacts, setArtifacts] = useState<ReplayArtifact[]>([]);
@@ -125,12 +109,12 @@ export function ReplaySection({
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showUploadForm, setShowUploadForm] = useState(
-    () => findCapabilityForMatch(matchId) === null,
+    () => findReplayCapabilityForMatch(matchId) === null,
   );
   const uploadAbortRef = useRef<AbortController | null>(null);
 
   if (activeMatchId !== matchId) {
-    const nextCapability = findCapabilityForMatch(matchId);
+    const nextCapability = findReplayCapabilityForMatch(matchId);
     setActiveMatchId(matchId);
     setCapability(nextCapability);
     setStatus(null);
@@ -162,6 +146,7 @@ export function ReplaySection({
         accessToken,
         matchId,
         updatedAt: new Date().toISOString(),
+        status: next.status,
       });
     },
     [clearCapabilityState, matchId, messages],
@@ -342,6 +327,7 @@ export function ReplaySection({
         accessToken: created.access_token,
         matchId,
         updatedAt: new Date().toISOString(),
+        status: created.status || "created",
       };
       saveReplayCapability(nextCapability);
       setCapability(nextCapability);
