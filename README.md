@@ -188,7 +188,7 @@ Gateway rate limits (`REPLAY_GATEWAY_RATE_LIMITS_ENFORCED`) are enforced in-proc
 
 Production hardening: the backend/worker container runs as a non-root user; the `replay-worker` Compose service runs with a read-only root filesystem, `tmpfs` scratch space at `/tmp` and `/var/tmp`, and a `stop_grace_period` so an in-flight job can finish draining after `SIGTERM` before being force-killed. Processing duration, failures (by error code), job retries, and cleanup lag are recorded in an in-memory metrics registry exposed as Prometheus text at `GET /internal/metrics` (an internal-only endpoint, not for public/browser use; worker-recorded metrics are process-local, so this endpoint reflects the API process's own view unless worker and API share a process).
 
-Run `make e2e-replay-compose` (or `./scripts/e2e_replay_compose.sh`) to exercise the full Docker Compose flow (locale routes, upload/complete/refresh/frames/delete, and object cleanup) end to end; it requires Docker and a configured `REPLAY_SMOKE_MATCH_ID`/`REPLAY_SMOKE_PUUID` and prints a clear `SKIPPED` notice instead of failing when either is unavailable.
+Run `make e2e-replay-compose` (or `./scripts/e2e_replay_compose.sh`) to exercise the full Docker Compose flow end to end: locale routes, upload/complete/refresh/frames, Replay-linked evidence, delete, and a post-delete check that the `replay_data` volume contains zero files. It requires Docker, Compose, and configured `REPLAY_SMOKE_MATCH_ID`/`REPLAY_SMOKE_PUUID`. If Docker, Compose, or those smoke identities are missing, the script prints `FAILED` and exits non-zero; it does not print `SKIPPED`.
 
 ### Riot disclaimer
 
@@ -375,7 +375,7 @@ S3 bucket CORS（`REPLAY_STORAGE_BACKEND=s3` 时）：允许前端源站对预�
 
 生产加固：后端/worker 容器以非 root 用户运行；`replay-worker` Compose 服务使用只读根文件系统，通过 `/tmp`、`/var/tmp` 的 `tmpfs` 提供可写临时空间，并设置 `stop_grace_period`，使正在处理中的任务在收到 `SIGTERM` 后仍有时间跑完再被强制终止。处理耗时、按错误码统计的失败数、任务重试次数与清理延迟都记录在内存指标注册表中，以 Prometheus 文本格式通过 `GET /internal/metrics` 暴露（仅限内部使用，不面向浏览器/公网；worker 记录的指标是进程本地的，除非 worker 与 API 共用进程，否则该端点只反映 API 进程自身的视角）。
 
-运行 `make e2e-replay-compose`（或 `./scripts/e2e_replay_compose.sh`）可端到端跑通完整 Docker Compose 流程（本地化路由、上传/完成/刷新/取帧/删除，以及对象清理）；需要 Docker 以及配置好的 `REPLAY_SMOKE_MATCH_ID`/`REPLAY_SMOKE_PUUID`，若二者不可用会打印明确的 `SKIPPED` 提示而不是失败。
+运行 `make e2e-replay-compose`（或 `./scripts/e2e_replay_compose.sh`）可端到端跑通完整 Docker Compose 流程：本地化路由、上传/完成/刷新/取帧、Replay 关联 evidence、删除，以及删除后确认 `replay_data` volume 文件数为 0。需要 Docker、Compose，以及配置好的 `REPLAY_SMOKE_MATCH_ID`/`REPLAY_SMOKE_PUUID`。若 Docker、Compose 或这些冒烟身份缺失，脚本会打印 `FAILED` 并以非零状态退出，不会打印 `SKIPPED`。
 
 ### Riot 声明
 
