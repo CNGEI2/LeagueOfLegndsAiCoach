@@ -202,3 +202,18 @@ def test_replay_api_responses_never_leak_sensitive_fields(
     assert missing.status_code == 404
     _assert_private(missing.text)
     assert "wrong-token" not in missing.text
+
+
+def test_joint_evidence_public_schema_excludes_replay_secrets() -> None:
+    from app.schemas.evidence import EvidenceArtifactReferenceResponse, JointEvidenceResponse
+
+    for model in (JointEvidenceResponse, EvidenceArtifactReferenceResponse):
+        field_names = set(model.model_fields)
+        for forbidden in (
+            "object_key",
+            "access_token",
+            "selected_puuid",
+            "presigned_url",
+            "token_digest",
+        ):
+            assert forbidden not in field_names

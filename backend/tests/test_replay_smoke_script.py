@@ -411,3 +411,197 @@ def test_poll_deleted_accepts_readable_deleted_status() -> None:
         poll_interval_seconds=0,
         poll_timeout_seconds=1,
     ) == {"status": "deleted"}
+
+
+def _linked_evidence_payload(
+    *,
+    artifact_ids: list[str],
+    request_id: str = "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+) -> dict[str, object]:
+    return {
+        "status": "ready",
+        "schema_version": 1,
+        "facts": [],
+        "windows": [
+            {
+                "window_id": "evidence-window:SENTINEL_WINDOW_ID",
+                "coverage": "full",
+                "artifacts": [{"artifact_id": artifact_id} for artifact_id in artifact_ids],
+            }
+        ],
+        "timeline_cache_status": "hit",
+        "replay_link": {
+            "status": "linked",
+            "full_count": 1,
+            "partial_count": 0,
+            "unavailable_count": 0,
+        },
+        "request_id": request_id,
+    }
+
+
+def test_replay_smoke_calls_linked_evidence_before_delete_when_enabled(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    smoke = _load_smoke_module()
+    replay_id = str(uuid4())
+    artifact_id = str(uuid4())
+    extra_artifact_id = str(uuid4())
+    access_token = "smoke-secret-token-value"
+    match_id = "NA1_9876543210"
+    puuid = "private-smoke-puuid"
+    video_path = tmp_path / "owned-authorized-smoke.mp4"
+    video_path.write_bytes(b"fake-mp4-bytes")
+    client = FakeSmokeClient(
+        responses={
+            "POST": [
+                FakeResponse(
+                    {
+                        "replay_id": replay_id,
+                        "access_token": access_token,
+                        "status": "created",
+                        "upload": {
+                            "method": "PUT",
+                            "url": f"/api/v1/replays/{replay_id}/content",
+                            "headers": {},
+                        },
+                    }
+                ),
+                FakeResponse({"replay_id": replay_id, "status": "queued"}),
+                FakeResponse(
+                    _linked_evidence_payload(artifact_ids=[artifact_id]),
+                ),
+            ],
+            "PUT": [FakeResponse({}, status_code=204)],
+            "GET": [
+                FakeResponse({"match_id": match_id, "platform": "NA1"}),
+                FakeResponse({"replay_id": replay_id, "status": "ready"}),
+                FakeResponse(
+                    {
+                        "artifacts": [
+                            {"artifact_id": artifact_id},
+                            {"artifact_id": extra_artifact_id},
+                        ]
+                    }
+                ),
+                FakeResponse({"error": {"code": "REPLAY_NOT_FOUND"}}, status_code=404),
+            ],
+            "DELETE": [FakeResponse({"replay_id": replay_id, "status": "deleting"})],
+        }
+    )
+
+    smoke.run_smoke(
+        client=client,
+        api_base_url="http://localhost:8000",
+        match_id=match_id,
+        puuid=puuid,
+        platform="NA1",
+        video_path=video_path,
+        poll_interval_seconds=0,
+        poll_timeout_seconds=1,
+        joint_evidence_enabled=True,
+    )
+
+    methods = [request[0] for request in client.requests]
+    assert methods.index("DELETE") > next(
+        index for index, request in enumerate(client.requests) if "/evidence" in request[1]
+    )
+    evidence_request = next(request for request in client.requests if "/evidence" in request[1])
+    assert evidence_request[0] == "POST"
+    assert evidence_request[2] == {"Authorization": f"Bearer {access_token}"}
+    assert evidence_request[3]["replay_id"] == replay_id  # type: ignore[index]
+    assert evidence_request[3]["puuid"] == puuid  # type: ignore[index]
+    assert methods[-1] == "GET"
+
+    output = capsys.readouterr().out
+    assert "Joint evidence linked smoke passed:" in output
+    assert "outcome=linked" in output
+    assert "windows=1" in output
+    assert "full=1" in output
+    assert "partial=0" in output
+    assert "unavailable=0" in output
+    assert "artifact_refs=1" in output
+    assert "elapsed_ms=" in output
+    assert "request_id=a3f4c1d2e5b67890a1b2c3d4e5f60718" in output
+    assert "replay=ready artifacts=2 delete=ok" in output
+    for sensitive in (
+        match_id,
+        puuid,
+        access_token,
+        replay_id,
+        artifact_id,
+        extra_artifact_id,
+        "SENTINEL_WINDOW_ID",
+        "http://localhost:8000",
+        "/api/v1/replays",
+        "Bearer",
+        "presigned",
+    ):
+        assert sensitive not in output
+
+
+def test_replay_smoke_rejects_evidence_artifact_outside_authorized_manifest(
+    tmp_path: Path,
+) -> None:
+    smoke = _load_smoke_module()
+    replay_id = str(uuid4())
+    manifest_id = str(uuid4())
+    leaked_id = str(uuid4())
+    video_path = tmp_path / "fixture.mp4"
+    video_path.write_bytes(b"fixture")
+    client = FakeSmokeClient(
+        responses={
+            "POST": [
+                FakeResponse(
+                    {
+                        "replay_id": replay_id,
+                        "access_token": "smoke-access-token",
+                        "status": "created",
+                        "upload": {
+                            "method": "PUT",
+                            "url": f"/api/v1/replays/{replay_id}/content",
+                            "headers": {},
+                        },
+                    }
+                ),
+                FakeResponse({"replay_id": replay_id, "status": "queued"}),
+                FakeResponse(_linked_evidence_payload(artifact_ids=[leaked_id])),
+            ],
+            "PUT": [FakeResponse({}, status_code=204)],
+            "GET": [
+                FakeResponse({"match_id": "NA1_1", "platform": "NA1"}),
+                FakeResponse({"replay_id": replay_id, "status": "ready"}),
+                FakeResponse({"artifacts": [{"artifact_id": manifest_id}]}),
+            ],
+            "DELETE": [],
+        }
+    )
+
+    with pytest.raises(smoke.SmokeFailure) as raised:
+        smoke.run_smoke(
+            client=client,
+            api_base_url="http://localhost:8000",
+            match_id="NA1_1",
+            puuid="smoke-player-puuid",
+            video_path=video_path,
+            poll_interval_seconds=0,
+            poll_timeout_seconds=1,
+            joint_evidence_enabled=True,
+        )
+
+    assert raised.value.code == "SMOKE_EVIDENCE_ARTIFACT_MISMATCH"
+    assert all(request[0] != "DELETE" for request in client.requests)
+
+
+def test_e2e_compose_enables_joint_evidence_only_for_the_ephemeral_run() -> None:
+    script = (REPOSITORY_ROOT / "scripts" / "e2e_replay_compose.sh").read_text()
+    compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text()
+    makefile = (REPOSITORY_ROOT / "Makefile").read_text()
+
+    assert "export JOINT_EVIDENCE_ENABLED=true" in script
+    assert "JOINT_EVIDENCE_ENABLED: ${JOINT_EVIDENCE_ENABLED:-false}" in compose
+    assert "smoke-riot:" in makefile
+    assert "scripts/smoke_riot.py" in makefile
+    assert 'echo "$JOINT_EVIDENCE_ENABLED"' not in script
+    assert 'cat "$repo_dir/.env"' not in script

@@ -73,7 +73,10 @@ def test_smoke_reports_generic_counts_without_identifier_or_secret(
     )
 
     output = capsys.readouterr().out
-    assert output == "Phase 2 Riot smoke passed: matches=3 locales=2 repeat=ok\n"
+    assert output == (
+        "Phase 2 Riot smoke passed: matches=3 locales=2 repeat=ok\n"
+        "Joint evidence smoke skipped: JOINT_EVIDENCE_ENABLED=false\n"
+    )
     for sensitive_value in (
         "Secret Player",
         "1115",
@@ -322,3 +325,178 @@ def test_optional_ambiguous_smoke_skips_when_unset(capsys: pytest.CaptureFixture
     )
     assert "skipped" in capsys.readouterr().out
     assert client.requests == []
+
+
+def _evidence_payload(
+    *,
+    cache_status: str,
+    request_id: str = "a3f4c1d2e5b67890a1b2c3d4e5f60718",
+) -> dict[str, object]:
+    return {
+        "status": "ready",
+        "schema_version": 1,
+        "facts": [{"fact_id": "timeline:NA1:SENTINEL_FACT_ID"}],
+        "windows": [
+            {
+                "window_id": "evidence-window:SENTINEL_WINDOW_ID",
+                "coverage": "unavailable",
+                "artifacts": [],
+            }
+        ],
+        "timeline_cache_status": cache_status,
+        "replay_link": None,
+        "request_id": request_id,
+    }
+
+
+def test_joint_evidence_smoke_skipped_without_posting_when_disabled(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = _success_client()
+
+    run_smoke(
+        client=client,
+        api_base_url="http://localhost:8000",
+        game_name="Secret Player",
+        tag_line="1115",
+        platform="NA1",
+        joint_evidence_enabled=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "Joint evidence smoke skipped: JOINT_EVIDENCE_ENABLED=false" in output
+    assert "Joint evidence smoke passed" not in output
+    assert all("/evidence" not in url for url, _params in client.requests)
+
+
+def test_joint_evidence_smoke_posts_twice_checks_cache_and_prints_safe_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    matches = [
+        {
+            "match_id": "NA1_123456789",
+            "detail_supported": True,
+            "analysis_supported": True,
+        }
+    ]
+    client = FakeSmokeClient(
+        responses=[
+            FakeResponse({"player": {"puuid": "private-puuid"}}),
+            FakeResponse({"matches": matches}),
+            FakeResponse({"match_id": "NA1_123456789"}),
+            FakeResponse({"match_id": "NA1_123456789"}),
+            FakeResponse({"matches": matches}),
+            FakeResponse(_evidence_payload(cache_status="miss")),
+            FakeResponse(_evidence_payload(cache_status="hit")),
+        ]
+    )
+
+    run_smoke(
+        client=client,
+        api_base_url="http://localhost:8000",
+        game_name="Secret Player",
+        tag_line="1115",
+        platform="NA1",
+        joint_evidence_enabled=True,
+    )
+
+    evidence_requests = [request for request in client.requests if "/evidence" in request[0]]
+    assert len(evidence_requests) == 2
+    assert evidence_requests[0][0] == evidence_requests[1][0]
+    assert evidence_requests[0][0].endswith("/api/v1/matches/NA1_123456789/evidence")
+    for _url, body in evidence_requests:
+        assert body["replay_id"] is None
+        assert "Authorization" not in body
+
+    output = capsys.readouterr().out
+    assert "Joint evidence smoke passed:" in output
+    assert "outcome=ready" in output
+    assert "facts=1" in output
+    assert "windows=1" in output
+    assert "cache=consistent" in output
+    assert "elapsed_ms=" in output
+    assert "request_id=a3f4c1d2e5b67890a1b2c3d4e5f60718" in output
+    for sensitive_value in (
+        "Secret Player",
+        "1115",
+        "private-puuid",
+        "NA1_123456789",
+        "SENTINEL_FACT_ID",
+        "SENTINEL_WINDOW_ID",
+        "http://localhost:8000",
+        "/api/v1/matches",
+        "Authorization",
+        "RGAPI-private-key",
+    ):
+        assert sensitive_value not in output
+
+
+def test_joint_evidence_smoke_requires_detail_and_analysis_supported_match() -> None:
+    client = FakeSmokeClient(
+        responses=[
+            FakeResponse({"player": {"puuid": "private-puuid"}}),
+            FakeResponse(
+                {
+                    "matches": [
+                        {
+                            "match_id": "NA1_123456789",
+                            "detail_supported": True,
+                            "analysis_supported": False,
+                        }
+                    ]
+                }
+            ),
+            FakeResponse({"match_id": "NA1_123456789"}),
+            FakeResponse({"match_id": "NA1_123456789"}),
+            FakeResponse(
+                {
+                    "matches": [
+                        {
+                            "match_id": "NA1_123456789",
+                            "detail_supported": True,
+                            "analysis_supported": False,
+                        }
+                    ]
+                }
+            ),
+        ]
+    )
+
+    with pytest.raises(SmokeFailure) as caught:
+        run_smoke(
+            client=client,
+            api_base_url="http://localhost:8000",
+            game_name="Secret Player",
+            tag_line="1115",
+            platform="NA1",
+            joint_evidence_enabled=True,
+        )
+
+    assert caught.value.code == "SMOKE_NO_EVIDENCE_SUPPORTED_MATCH"
+
+
+def test_joint_evidence_smoke_rejects_cache_miss_on_second_request() -> None:
+    matches = [{"match_id": "NA1_123456789", "detail_supported": True, "analysis_supported": True}]
+    client = FakeSmokeClient(
+        responses=[
+            FakeResponse({"player": {"puuid": "private-puuid"}}),
+            FakeResponse({"matches": matches}),
+            FakeResponse({"match_id": "NA1_123456789"}),
+            FakeResponse({"match_id": "NA1_123456789"}),
+            FakeResponse({"matches": matches}),
+            FakeResponse(_evidence_payload(cache_status="miss")),
+            FakeResponse(_evidence_payload(cache_status="miss")),
+        ]
+    )
+
+    with pytest.raises(SmokeFailure) as caught:
+        run_smoke(
+            client=client,
+            api_base_url="http://localhost:8000",
+            game_name="Secret Player",
+            tag_line="1115",
+            platform="NA1",
+            joint_evidence_enabled=True,
+        )
+
+    assert caught.value.code == "SMOKE_EVIDENCE_CACHE_MISS"

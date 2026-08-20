@@ -15,7 +15,7 @@ LoL AI Coach is a bilingual League of Legends match-data browser. Phase 2 resolv
 - The tag line is independent of platform. For example, a numeric tag such as `#1234` is valid and is not inferred from any platform code.
 - Queue `400` (Normal Draft) and `420` (Ranked Solo/Duo) are marked as data-supported. Other returned queues remain visible but do not offer a detail view when their team structure is unsupported.
 - Static data comes from a match-compatible Data Dragon version. `en-US` maps to `en_US`; `zh-CN` maps to `zh_CN`. If names or assets cannot be resolved, numeric data still appears with a localized degraded-data warning; the app never substitutes current-patch names silently.
-- Not in Phase 2 / Replay R1: Match Timeline, scores, coaching findings, AI calls, behavioral judgment, positioning, mechanics, awareness, intent, causality, OP.GG integration, or raw upstream JSON storage.
+- Not in Phase 2 / Replay R1: scores, coaching findings, AI calls, behavioral judgment, positioning, mechanics, awareness, intent, causality, OP.GG integration, or raw upstream JSON storage. Match Timeline evidence is Joint Evidence J1 and stays dark until `JOINT_EVIDENCE_ENABLED=true`.
 
 ### Platform detection rollout
 
@@ -28,6 +28,24 @@ LoL AI Coach is a bilingual League of Legends match-data browser. Phase 2 resolv
 5. Enable detection with `RIOT_PLATFORM_DETECTION_ENABLED=true`.
 6. Monitor `riot_platform_detection_*` and `riot_platform_confirmation_total` metrics.
 7. To roll back, set the flag back to `false`. The compatibility `GET /api/v1/players/resolve` route remains available.
+
+### Joint Evidence J1 rollout
+
+`JOINT_EVIDENCE_ENABLED` defaults to `false`. Roll out in this order:
+
+1. Apply Alembic migration `0004_match_timelines` (`cd backend && .venv/bin/alembic upgrade head`).
+2. Deploy the backend with `JOINT_EVIDENCE_ENABLED=false` so the evidence route exists but stays dark.
+3. Deploy the compatible frontend (explicit Prepare timeline evidence action).
+4. Confirm Timeline cache TTLs (`TIMELINE_CACHE_TTL_SECONDS`, `TIMELINE_NOT_FOUND_TTL_SECONDS`).
+5. Enable the flag with `JOINT_EVIDENCE_ENABLED=true`.
+6. Monitor closed-label metrics: `joint_evidence_api_requests_total` (`outcome=ready|error`, `error_code` allowlist), `joint_evidence_timeline_cache_total`, `joint_evidence_windows_total{result="planned"}`, `joint_evidence_window_truncations_total`, `joint_evidence_replay_coverage_total{coverage="full|partial|unavailable"}`, and `joint_evidence_singleflight_total`.
+7. To roll back, set only `JOINT_EVIDENCE_ENABLED=false`. Do not downgrade migration `0004`.
+
+J1 does not call OpenAI and does not create new media; local extra external-service cost is approximately zero beyond existing Riot and local compute. Only user-owned or explicitly authorized recordings may enter Replay.
+
+Timeline-only smoke: `make smoke-riot` against a running backend with the flag on. It posts evidence twice and prints only `outcome`, fact/window counts, cache consistency, elapsed time, and a safe request ID.
+
+Authorized Replay-linked smoke: `make smoke-replay` or `make e2e-replay-compose` with the flag on. After Replay is ready and before delete, it posts evidence with the in-memory possession token, checks artifact references against the authorized manifest, then finishes delete and zero-residue checks.
 
 Production API keys require normal rotation and must never be pasted into source files, fixtures, logs, or chat.
 
@@ -98,12 +116,12 @@ make smoke-replay
 - `make verify-replay` runs Replay unit/API/frontend tests only (`not integration and not replay_ffmpeg`). Frontend portion uses `pnpm test` for the replay Vitest files.
 - `make verify-replay-ffmpeg` requires real `ffmpeg`/`ffprobe` binaries and runs the marked media integration test.
 - `make verify-replay-postgres` requires `TEST_DATABASE_URL`, upgrades migrations, and runs PostgreSQL integration tests excluding the FFmpeg media suite.
-- `make smoke-riot` calls an already-running local backend. It also requires non-empty ignored `RIOT_SMOKE_GAME_NAME`, `RIOT_SMOKE_TAG_LINE`, and `RIOT_SMOKE_PLATFORM` settings plus `RIOT_API_KEY`. When `RIOT_PLATFORM_DETECTION_ENABLED=true` on both the smoke runner and the running API, it also posts `/api/v1/players/detect` twice and prints only safe detection fields (`status`, candidate count, elapsed time, request ID). Optional `RIOT_SMOKE_AMBIGUOUS_RIOT_ID` exercises confirm when set. The command never prints the Riot ID, PUUID, match ID, key, full URL, or raw response body.
-- `make smoke-replay` requires a running API + replay worker, FFmpeg, and ignored `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID`. It generates a 600s 320×180 lavfi fixture at runtime, exercises create/upload/complete/poll/artifacts/delete, and prints only a generic line such as `replay=ready artifacts=3 delete=ok`.
+- `make smoke-riot` calls an already-running local backend. It also requires non-empty ignored `RIOT_SMOKE_GAME_NAME`, `RIOT_SMOKE_TAG_LINE`, and `RIOT_SMOKE_PLATFORM` settings plus `RIOT_API_KEY`. When `RIOT_PLATFORM_DETECTION_ENABLED=true` on both the smoke runner and the running API, it also posts `/api/v1/players/detect` twice and prints only safe detection fields (`status`, candidate count, elapsed time, request ID). Optional `RIOT_SMOKE_AMBIGUOUS_RIOT_ID` exercises confirm when set. When `JOINT_EVIDENCE_ENABLED=true`, it posts Timeline-only evidence twice for a `detail_supported` + `analysis_supported` match and prints only outcome, counts, cache consistency, elapsed time, and a safe request ID; when the flag is false it prints a safe skip line. The command never prints the Riot ID, PUUID, match ID, key, full URL, or raw response body.
+- `make smoke-replay` requires a running API + replay worker, FFmpeg, and ignored `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID`. It generates a 600s 320×180 lavfi fixture at runtime, exercises create/upload/complete/poll/artifacts, optional linked evidence (when `JOINT_EVIDENCE_ENABLED=true`), and delete, and prints only generic lines such as `replay=ready artifacts=3 delete=ok`.
 
 CI runs non-integration backend checks, the PostgreSQL integration gate, and all frontend checks. It intentionally does not run a live Riot smoke flow because development keys and smoke identities are local secrets.
 
-Observed acceptance on this workstation: automated unit/type/build checks and the local PostgreSQL gate passed; the live smoke completed with the safe generic result `matches=10 locales=2 repeat=ok`. Real English and Chinese browser flows displayed ten newest-to-oldest matches, localized champion/item assets, supported and visibly unsupported queues, accessible standard-match detail, responsive narrow layouts, and the permanent data-only notice without behavioral or causality claims. Controlled degraded/error checks preserved numeric statistics and showed localized safe recovery states. Docker Compose remains unverified because Docker CLI access is unavailable; it is not recorded as passed.
+Observed acceptance on this workstation: automated unit/type/build checks and the local PostgreSQL gate passed; the live smoke completed with the safe generic result `matches=10 locales=2 repeat=ok`. Real English and Chinese browser flows displayed ten newest-to-oldest matches, localized champion/item assets, supported and visibly unsupported queues, accessible standard-match detail, responsive narrow layouts, and the permanent data-only notice without behavioral or causality claims. Controlled degraded/error checks preserved numeric statistics and showed localized safe recovery states. Task 8 Compose brought the stack up and both locale routes returned 200; the Replay-linked lifecycle did not finish because live Riot authentication failed, so artifacts/delete/zero-residue are not recorded as passed.
 
 ### Configuration
 
@@ -119,6 +137,8 @@ Observed acceptance on this workstation: automated unit/type/build checks and th
 | `RIOT_PLATFORM_DETECTION_ENABLED` | Enables automatic platform detection APIs. Default `false`. |
 | `RIOT_PLATFORM_DETECTION_TTL_SECONDS` / `RIOT_PLATFORM_DETECTION_NOT_FOUND_TTL_SECONDS` / `RIOT_PLATFORM_CONFIRMATION_TTL_SECONDS` | Detection cache and confirmation TTLs. |
 | `RIOT_ACCOUNT_PRIMARY_REGION` | Primary Account-V1 region before stable regional fallback. |
+| `JOINT_EVIDENCE_ENABLED` | Enables Joint Evidence J1 (`POST /api/v1/matches/{match_id}/evidence`). Default `false`. |
+| `TIMELINE_CACHE_TTL_SECONDS` / `TIMELINE_NOT_FOUND_TTL_SECONDS` | Positive and negative Timeline cache TTLs. |
 | `SMOKE_API_BASE_URL` | Already-running local backend base URL, default `http://localhost:8000`. |
 | `NEXT_PUBLIC_API_BASE_URL` | Browser-visible backend base URL; contains no secret. |
 | `REPLAY_ENABLED` | Enables Replay APIs/worker. Default `false`. |
@@ -140,6 +160,7 @@ Observed acceptance on this workstation: automated unit/type/build checks and th
 - `GET /api/v1/players/resolve`: compatibility resolve for a valid `platform`, `game_name`, and `tag_line`.
 - `GET /api/v1/players/{puuid}/matches`: returns up to ten newest-to-oldest normalized matches.
 - `GET /api/v1/matches/{match_id}`: returns a localized supported match detail for the selected player.
+- `POST /api/v1/matches/{match_id}/evidence`: on-demand Joint Evidence J1 (404 `NOT_FOUND` while `JOINT_EVIDENCE_ENABLED=false`).
 
 ### Replay R1
 
@@ -186,7 +207,7 @@ LoL AI Coach 是一个中英双语的《英雄联盟》对局数据浏览工具�
 - 标签与平台相互独立。例如 `#1234` 这类数字标签有效，绝不会由任何平台代码自动推断。
 - 队列 `400`（自选模式）和 `420`（单排/双排）标记为数据支持。其他返回队列仍会展示；若队伍结构不支持，则不会提供详情页。
 - 静态资料使用与对局版本兼容的 Data Dragon：`en-US` 映射到 `en_US`，`zh-CN` 映射到 `zh_CN`。若名称或资源无法解析，数值数据仍会展示并给出本地化降级提示；不会偷偷用当前版本名称替代。
-- Phase 2 / Replay R1 不包含：Match Timeline、评分、复盘结论、AI 调用、行为判断、走位、操作、意识、意图、因果推断、OP.GG 集成或原始上游 JSON 存储。
+- Phase 2 / Replay R1 不包含：评分、复盘结论、AI 调用、行为判断、走位、操作、意识、意图、因果推断、OP.GG 集成或原始上游 JSON 存储。Match Timeline 证据属于 Joint Evidence J1，在 `JOINT_EVIDENCE_ENABLED=true` 之前保持关闭。
 
 ### 自动识别上线顺序
 
@@ -199,6 +220,24 @@ LoL AI Coach 是一个中英双语的《英雄联盟》对局数据浏览工具�
 5. 将 `RIOT_PLATFORM_DETECTION_ENABLED=true` 开启识别。
 6. 监控 `riot_platform_detection_*` 与 `riot_platform_confirmation_total` 指标。
 7. 回滚时把开关设回 `false`；兼容 `GET /api/v1/players/resolve` 仍可用。
+
+### Joint Evidence J1 上线顺序
+
+`JOINT_EVIDENCE_ENABLED` 默认 `false`。按以下顺序上线：
+
+1. 先执行 Alembic 迁移 `0004_match_timelines`（`cd backend && .venv/bin/alembic upgrade head`）。
+2. 先部署后端并保持 `JOINT_EVIDENCE_ENABLED=false`。
+3. 部署兼容前端（显式的「准备时间线证据」操作）。
+4. 确认 Timeline 缓存 TTL（`TIMELINE_CACHE_TTL_SECONDS`、`TIMELINE_NOT_FOUND_TTL_SECONDS`）。
+5. 将 `JOINT_EVIDENCE_ENABLED=true` 开启证据。
+6. 监控闭合标签指标：`joint_evidence_api_requests_total`（`outcome=ready|error` 与允许的 `error_code`）、`joint_evidence_timeline_cache_total`、`joint_evidence_windows_total{result="planned"}`、`joint_evidence_window_truncations_total`、`joint_evidence_replay_coverage_total{coverage="full|partial|unavailable"}`、`joint_evidence_singleflight_total`。
+7. 回滚时只把 `JOINT_EVIDENCE_ENABLED` 设回 `false`，不要降级迁移 `0004`。
+
+J1 不调用 OpenAI、不创建新媒体；本地新增外部服务成本约为零（仍只有既有 Riot 与本地计算）。进入 Replay 的录像必须由用户拥有或获得明确授权。
+
+仅时间线冒烟：对已运行后端执行 `make smoke-riot`（flag 开启时）。脚本会把 evidence 请求发两次，只打印 outcome、facts/windows 数量、cache 一致性、耗时和安全 request ID。
+
+已授权 Replay 关联冒烟：`make smoke-replay` 或 `make e2e-replay-compose`（flag 开启时）。Replay ready 之后、delete 之前会带 possession token 调用 evidence，校验 artifact 引用是独立授权 manifest 的子集，然后继续完成删除与零残留检查。
 
 生产 API Key 需按常规轮换，绝不能粘贴进源码、夹具、日志或聊天。
 
@@ -269,12 +308,12 @@ make smoke-replay
 - `make verify-replay` 仅运行 Replay 单元/API/前端测试（`not integration and not replay_ffmpeg`）；前端部分用 `pnpm test` 跑 replay Vitest 文件。
 - `make verify-replay-ffmpeg` 需要真实 `ffmpeg`/`ffprobe`，运行标记的媒体集成测试。
 - `make verify-replay-postgres` 需要 `TEST_DATABASE_URL`，升级迁移并运行排除 FFmpeg 媒体套件的 PostgreSQL 集成测试。
-- `make smoke-riot` 调用已经运行的本地后端，同时要求忽略的 `RIOT_SMOKE_GAME_NAME`、`RIOT_SMOKE_TAG_LINE`、`RIOT_SMOKE_PLATFORM` 非空，以及已配置的 `RIOT_API_KEY`。成功时仅输出通用计数；不会输出 Riot ID、PUUID、对局 ID、密钥、完整 URL 或原始响应体。
-- `make smoke-replay` 需要已运行的 API 与 replay worker、FFmpeg，以及忽略的 `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID`。脚本会在运行时生成 600 秒 320×180 lavfi 测试视频，完成 create/upload/complete/poll/artifacts/delete，并只打印类似 `replay=ready artifacts=3 delete=ok` 的通用结果。
+- `make smoke-riot` 调用已经运行的本地后端，同时要求忽略的 `RIOT_SMOKE_GAME_NAME`、`RIOT_SMOKE_TAG_LINE`、`RIOT_SMOKE_PLATFORM` 非空，以及已配置的 `RIOT_API_KEY`。成功时仅输出通用计数；`JOINT_EVIDENCE_ENABLED=true` 时会额外做两次 Timeline-only evidence 请求并只打印 outcome、计数、cache 一致性和安全 request ID，flag 关闭时只打印安全 skip 行。不会输出 Riot ID、PUUID、对局 ID、密钥、完整 URL 或原始响应体。
+- `make smoke-replay` 需要已运行的 API 与 replay worker、FFmpeg，以及忽略的 `REPLAY_SMOKE_MATCH_ID` / `REPLAY_SMOKE_PUUID`。脚本会在运行时生成 600 秒 320×180 lavfi 测试视频，完成 create/upload/complete/poll/artifacts、可选的关联 evidence（`JOINT_EVIDENCE_ENABLED=true` 时）和 delete，并只打印类似 `replay=ready artifacts=3 delete=ok` 的通用结果。
 
 CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。由于开发密钥和冒烟账号属于本地机密，CI 有意不运行在线 Riot 冒烟流程。
 
-本机已实际观察到以下验收结果：自动化单元/类型/构建检查与本地 PostgreSQL 门通过；在线冒烟以安全通用结果 `matches=10 locales=2 repeat=ok` 完成。真实中英文浏览器流程展示了十场按新到旧排列的对局、本地化英雄与装备资源、明确区分的支持/不支持队列、可访问的标准对局详情、窄屏响应式布局和永久的数据范围提示，且没有行为或因果判断。受控降级与错误检查保留了数值统计，并提供本地化的安全恢复状态。此 Mac 没有 Docker CLI，Docker Compose 仍未验证，不能标记为已通过。
+本机已实际观察到以下验收结果：自动化单元/类型/构建检查与本地 PostgreSQL 门通过；在线冒烟以安全通用结果 `matches=10 locales=2 repeat=ok` 完成。真实中英文浏览器流程展示了十场按新到旧排列的对局、本地化英雄与装备资源、明确区分的支持/不支持队列、可访问的标准对局详情、窄屏响应式布局和永久的数据范围提示，且没有行为或因果判断。受控降级与错误检查保留了数值统计，并提供本地化的安全恢复状态。Task 8 Compose 拉起栈后 `/zh-CN` 与 `/en-US` 返回 200；因在线 Riot 鉴权失败，Replay 关联生命周期未完成，artifacts/delete/零残留不能记为通过。
 
 ### 配置
 
@@ -286,6 +325,9 @@ CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。
 | `RIOT_API_KEY` | 仅后端使用的 Riot 密钥；`.env.example` 必须为空。 |
 | `RIOT_SMOKE_GAME_NAME` / `RIOT_SMOKE_TAG_LINE` | 被忽略的本地冒烟身份；不要提交真实玩家标识。 |
 | `RIOT_SMOKE_PLATFORM` | 兼容 resolve 冒烟平台（封闭目录中的平台代码，如 `NA1` / `EUW1` / `KR`）。 |
+| `RIOT_ACCOUNT_PRIMARY_REGION` | Account-V1 主区域，随后回退到稳定区域。 |
+| `JOINT_EVIDENCE_ENABLED` | 启用 Joint Evidence J1（`POST /api/v1/matches/{match_id}/evidence`）；默认 `false`。 |
+| `TIMELINE_CACHE_TTL_SECONDS` / `TIMELINE_NOT_FOUND_TTL_SECONDS` | Timeline 正/负缓存 TTL。 |
 | `SMOKE_API_BASE_URL` | 已运行本地后端的基础地址，默认 `http://localhost:8000`。 |
 | `NEXT_PUBLIC_API_BASE_URL` | 浏览器可见的后端基础地址；不包含密钥。 |
 | `REPLAY_ENABLED` | 启用 Replay API/worker；默认 `false`。 |
@@ -305,6 +347,7 @@ CI 会运行非集成后端检查、PostgreSQL 集成门和所有前端检查。
 - `GET /api/v1/players/resolve`：根据有效 `platform`、`game_name`、`tag_line` 查询玩家。
 - `GET /api/v1/players/{puuid}/matches`：返回最多十场按新到旧排序的规范化对局。
 - `GET /api/v1/matches/{match_id}`：返回所选玩家的本地化、受支持对局详情。
+- `POST /api/v1/matches/{match_id}/evidence`：按需 Joint Evidence J1（`JOINT_EVIDENCE_ENABLED=false` 时返回 404 `NOT_FOUND`）。
 
 ### Replay R1
 

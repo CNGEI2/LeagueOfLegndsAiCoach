@@ -12,6 +12,7 @@
 #      smoke-replay`), run the full Replay R1 flow against the composed
 #      backend: load match detail into the fresh DB -> create -> local upload ->
 #      complete -> poll/refresh status until ready -> list artifacts/frames
+#      -> prepare linked joint evidence (flag enabled for this ephemeral run)
 #      -> delete.
 #   4. After delete, confirm object cleanup: the source/normalized/frame
 #      objects for that replay must no longer be present in the replay_data
@@ -97,6 +98,8 @@ resolve_replay_data_volume() {
 export REPLAY_ENABLED=true
 # Zero-residue checks inspect the local volume mount; never allow S3 here.
 export REPLAY_STORAGE_BACKEND=local
+# Task 8 ephemeral verification only. Compose's declared default remains false.
+export JOINT_EVIDENCE_ENABLED=true
 export REPLAY_SMOKE_PLATFORM="$(read_smoke_env_value REPLAY_SMOKE_PLATFORM)"
 export REPLAY_SMOKE_PLATFORM="${REPLAY_SMOKE_PLATFORM:-NA1}"
 export REPLAY_SMOKE_MATCH_ID="$(read_smoke_env_value REPLAY_SMOKE_MATCH_ID)"
@@ -172,7 +175,7 @@ for locale in zh-CN en-US; do
   log "frontend locale route /${locale} responded 200"
 done
 
-log "running the full replay flow (create, upload, complete, refresh, frames, delete)"
+log "running the full replay flow (create, upload, complete, refresh, frames, linked evidence, delete)"
 PYTHONPATH="$repo_dir/backend" SMOKE_API_BASE_URL="$api_base_url" \
   "$repo_dir/backend/.venv/bin/python" "$repo_dir/scripts/smoke_replay.py"
 

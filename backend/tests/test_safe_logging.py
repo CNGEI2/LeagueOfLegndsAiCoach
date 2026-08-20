@@ -64,3 +64,35 @@ async def test_request_context_uses_the_route_template_not_path_identifiers(capl
     assert payload["request_id"] == "request-2"
     assert payload["route"] == "/api/v1/players/{puuid}/matches"
     assert "full-puuid-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_evidence_request_context_uses_route_template(caplog) -> None:  # type: ignore[no-untyped-def]
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/matches/SENTINEL_MATCH_ID/evidence",
+            "headers": [],
+            "route": SimpleNamespace(path="/api/v1/matches/{match_id}/evidence"),
+        }
+    )
+    request.state.request_id = "request-evidence"
+    dependency = bind_safe_request_context(request)
+    await anext(dependency)
+    try:
+        with caplog.at_level(logging.INFO, logger="lol_ai_coach.test"):
+            log_safe_operation(
+                logging.getLogger("lol_ai_coach.test"),
+                event="joint_evidence",
+                safe_status="success",
+                upstream="riot-match-timeline-v5",
+                latency_ms=1,
+                retry_count=0,
+            )
+    finally:
+        await dependency.aclose()
+
+    payload = json.loads(caplog.messages[-1])
+    assert payload["route"] == "/api/v1/matches/{match_id}/evidence"
+    assert "SENTINEL_MATCH_ID" not in caplog.text

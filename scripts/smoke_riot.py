@@ -31,6 +31,7 @@ def main() -> int:
                 game_name=settings.riot_smoke_game_name,
                 tag_line=settings.riot_smoke_tag_line,
                 platform=settings.riot_smoke_platform,
+                joint_evidence_enabled=settings.joint_evidence_enabled,
             )
             if settings.riot_platform_detection_enabled:
                 run_detection_smoke(

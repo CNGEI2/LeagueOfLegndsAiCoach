@@ -51,6 +51,7 @@ def run_smoke(
     game_name: str,
     tag_line: str,
     platform: str,
+    joint_evidence_enabled: bool = False,
 ) -> None:
     """Exercise resolve, localized details, and a repeat recent-match request safely."""
     base_url = api_base_url.rstrip("/")
@@ -99,6 +100,14 @@ def run_smoke(
         {"platform": platform, "count": 10, "locale": "en-US"},
     )
     print(f"Phase 2 Riot smoke passed: matches={len(matches)} locales=2 repeat=ok")
+    _run_joint_evidence_smoke(
+        client=client,
+        base_url=base_url,
+        platform=platform,
+        puuid=puuid,
+        matches=matches,
+        enabled=joint_evidence_enabled,
+    )
 
 
 def run_detection_smoke(
@@ -269,3 +278,77 @@ def _required_string(payload: Mapping[str, object], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise SmokeFailure("SMOKE_INVALID_RESPONSE")
     return value
+
+
+def _run_joint_evidence_smoke(
+    *,
+    client: SmokeClient,
+    base_url: str,
+    platform: str,
+    puuid: str,
+    matches: list[object],
+    enabled: bool,
+) -> None:
+    if not enabled:
+        print("Joint evidence smoke skipped: JOINT_EVIDENCE_ENABLED=false")
+        return
+    evidence_match = next(
+        (
+            match
+            for match in matches
+            if isinstance(match, Mapping)
+            and match.get("detail_supported") is True
+            and match.get("analysis_supported") is True
+        ),
+        None,
+    )
+    if evidence_match is None:
+        raise SmokeFailure("SMOKE_NO_EVIDENCE_SUPPORTED_MATCH")
+    match_id = _required_string(evidence_match, "match_id")
+    url = f"{base_url}/api/v1/matches/{quote(match_id, safe='')}/evidence"
+    body = {"platform": platform, "puuid": puuid, "locale": "en-US", "replay_id": None}
+    started = time.perf_counter()
+    first = _post_json(client, url, body)
+    second = _post_json(client, url, body)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if _evidence_semantics(first) != _evidence_semantics(second):
+        raise SmokeFailure("SMOKE_EVIDENCE_MISMATCH")
+    if second.get("timeline_cache_status") != "hit":
+        raise SmokeFailure("SMOKE_EVIDENCE_CACHE_MISS")
+    facts = first.get("facts")
+    windows = first.get("windows")
+    if first.get("status") != "ready" or not isinstance(facts, list):
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    if not isinstance(windows, list):
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    request_id = _safe_request_id(first.get("request_id"))
+    request_part = f" request_id={request_id}" if request_id is not None else ""
+    print(
+        "Joint evidence smoke passed: "
+        f"outcome=ready facts={len(facts)} windows={len(windows)} "
+        f"cache=consistent elapsed_ms={elapsed_ms}{request_part}"
+    )
+
+
+def _evidence_semantics(payload: Mapping[str, object]) -> tuple[object, ...]:
+    facts = payload.get("facts")
+    windows = payload.get("windows")
+    if not isinstance(facts, list) or not isinstance(windows, list):
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    fact_ids: list[str] = []
+    window_ids: list[str] = []
+    for fact in facts:
+        if not isinstance(fact, Mapping):
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        fact_id = fact.get("fact_id")
+        if not isinstance(fact_id, str):
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        fact_ids.append(fact_id)
+    for window in windows:
+        if not isinstance(window, Mapping):
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        window_id = window.get("window_id")
+        if not isinstance(window_id, str):
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        window_ids.append(window_id)
+    return payload.get("status"), payload.get("schema_version"), tuple(fact_ids), tuple(window_ids)

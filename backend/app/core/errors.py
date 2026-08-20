@@ -156,7 +156,10 @@ def _error_response(
 
 
 def _record_joint_evidence_api_error(*, request: Request, error_code: str) -> None:
-    if not is_joint_evidence_prepare_request(method=request.method, path=request.url.path):
+    method = request.scope.get("method")
+    if not isinstance(method, str):
+        return
+    if not is_joint_evidence_prepare_request(method=method, path=request.url.path):
         return
     registry = getattr(request.app.state, "replay_metrics", None)
     if registry is None:

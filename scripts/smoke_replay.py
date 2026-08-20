@@ -17,6 +17,7 @@ from uuid import UUID
 from app.core.config import ROOT_ENV_FILE
 
 _SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{1,79}$")
+_SAFE_REQUEST_ID = re.compile(r"^[0-9a-f]{32}$")
 _RIGHTS_STATEMENT_VERSION = "2026-08-01"
 CommandRunner = Callable[..., object]
 
@@ -101,6 +102,7 @@ def run_smoke(
     ffmpeg_path: str = "ffmpeg",
     poll_interval_seconds: float = 2.0,
     poll_timeout_seconds: float = 900.0,
+    joint_evidence_enabled: bool = False,
 ) -> None:
     require_smoke_configuration(match_id=match_id, puuid=puuid)
     temporary_dir: tempfile.TemporaryDirectory[str] | None = None
@@ -190,6 +192,18 @@ def run_smoke(
         artifacts = artifacts_payload.get("artifacts")
         if not isinstance(artifacts, list):
             raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+
+        if joint_evidence_enabled:
+            _run_linked_evidence_smoke(
+                client,
+                api_base_url=api_base_url,
+                match_id=match_id,
+                puuid=puuid,
+                platform=platform,
+                replay_id=replay_id,
+                access_token=access_token,
+                artifacts=artifacts,
+            )
 
         _request_json(
             client,
@@ -393,6 +407,86 @@ def _env_value(name: str) -> str:
     return ""
 
 
+def _env_flag(name: str) -> bool:
+    return _env_value(name).strip().lower() in {"1", "true", "yes"}
+
+
+def _safe_request_id(value: object) -> str | None:
+    if isinstance(value, str) and _SAFE_REQUEST_ID.fullmatch(value) is not None:
+        return value
+    return None
+
+
+def _run_linked_evidence_smoke(
+    client: SmokeClient,
+    *,
+    api_base_url: str,
+    match_id: str,
+    puuid: str,
+    platform: str,
+    replay_id: str,
+    access_token: str,
+    artifacts: list[object],
+) -> None:
+    manifest_ids = {
+        artifact.get("artifact_id")
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+    }
+    started = time.perf_counter()
+    evidence = _request_json(
+        client,
+        "POST",
+        f"{api_base_url.rstrip('/')}/api/v1/matches/{match_id}/evidence",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={
+            "platform": platform,
+            "puuid": puuid,
+            "locale": "en-US",
+            "replay_id": replay_id,
+        },
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    replay_link = evidence.get("replay_link")
+    if not isinstance(replay_link, Mapping) or replay_link.get("status") != "linked":
+        raise SmokeFailure("SMOKE_EVIDENCE_NOT_LINKED")
+    windows = evidence.get("windows")
+    if not isinstance(windows, list):
+        raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+    full_count = 0
+    partial_count = 0
+    unavailable_count = 0
+    artifact_refs = 0
+    for window in windows:
+        if not isinstance(window, Mapping):
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        coverage = window.get("coverage")
+        if coverage == "full":
+            full_count += 1
+        elif coverage == "partial":
+            partial_count += 1
+        elif coverage == "unavailable":
+            unavailable_count += 1
+        refs = window.get("artifacts") or []
+        if not isinstance(refs, list):
+            raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+        for ref in refs:
+            if not isinstance(ref, Mapping):
+                raise SmokeFailure("SMOKE_INVALID_RESPONSE")
+            artifact_id = ref.get("artifact_id")
+            if artifact_id not in manifest_ids:
+                raise SmokeFailure("SMOKE_EVIDENCE_ARTIFACT_MISMATCH")
+            artifact_refs += 1
+    request_id = _safe_request_id(evidence.get("request_id"))
+    request_part = f" request_id={request_id}" if request_id is not None else ""
+    print(
+        "Joint evidence linked smoke passed: "
+        f"outcome=linked windows={len(windows)} full={full_count} "
+        f"partial={partial_count} unavailable={unavailable_count} "
+        f"artifact_refs={artifact_refs} elapsed_ms={elapsed_ms}{request_part}"
+    )
+
+
 def main() -> int:
     try:
         import httpx2
@@ -409,6 +503,7 @@ def main() -> int:
                 puuid=_env_value("REPLAY_SMOKE_PUUID"),
                 platform=_env_value("REPLAY_SMOKE_PLATFORM") or "NA1",
                 ffmpeg_path=_env_value("REPLAY_FFMPEG_PATH") or "ffmpeg",
+                joint_evidence_enabled=_env_flag("JOINT_EVIDENCE_ENABLED"),
             )
     except SmokeFailure as error:
         print(error)
