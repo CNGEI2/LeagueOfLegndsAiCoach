@@ -488,6 +488,26 @@ export const evidenceWindowSchema = z
         message: "covered interval must lie inside the evidence window",
       });
     }
+    const coversWindow = coveredStart === window.start_ms && coveredEnd === window.end_ms;
+    if (window.coverage === "full" && !coversWindow) {
+      context.addIssue({
+        code: "custom",
+        message: "full coverage must equal the evidence window",
+      });
+    }
+    if (window.coverage === "partial" && coversWindow) {
+      context.addIssue({
+        code: "custom",
+        message: "partial coverage must be a proper subset of the evidence window",
+      });
+    }
+    const offset = videoStart - coveredStart;
+    if (videoEnd - coveredEnd !== offset) {
+      context.addIssue({
+        code: "custom",
+        message: "video interval duration must equal covered game duration",
+      });
+    }
     for (const artifact of window.artifacts) {
       if (artifact.game_time_ms < coveredStart || artifact.game_time_ms > coveredEnd) {
         context.addIssue({
@@ -499,6 +519,12 @@ export const evidenceWindowSchema = z
         context.addIssue({
           code: "custom",
           message: "artifact video time must lie inside the authorized coverage interval",
+        });
+      }
+      if (artifact.video_time_ms - artifact.game_time_ms !== offset) {
+        context.addIssue({
+          code: "custom",
+          message: "artifact times must use the window game-to-video offset",
         });
       }
     }
@@ -555,6 +581,23 @@ export const jointEvidenceResponseSchema = z
         context.addIssue({
           code: "custom",
           message: "linked summary counts must match window coverage",
+        });
+      }
+
+      const offsets = response.windows.flatMap((window) => {
+        if (
+          window.coverage === "unavailable" ||
+          window.covered_game_start_ms === null ||
+          window.video_start_ms === null
+        ) {
+          return [];
+        }
+        return [window.video_start_ms - window.covered_game_start_ms];
+      });
+      if (offsets.some((value) => value !== offsets[0])) {
+        context.addIssue({
+          code: "custom",
+          message: "linked available windows must share one game-to-video offset",
         });
       }
     }

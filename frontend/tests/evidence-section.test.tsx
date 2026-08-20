@@ -173,6 +173,26 @@ function artifactsManifest() {
   };
 }
 
+function readyCapability() {
+  return {
+    replayId: REPLAY_ID,
+    accessToken: TOKEN,
+    matchId: MATCH_ID,
+    updatedAt: "2026-08-01T15:00:00.000Z",
+    status: "ready" as const,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function renderSection(
   props: Partial<{
     matchId: string;
@@ -840,5 +860,262 @@ describe("EvidenceSection", () => {
     const validationAlert = await screen.findByRole("alert");
     expect(validationAlert).toHaveTextContent(messages.evidenceValidationError);
     expect(validationAlert).not.toHaveTextContent(messages.invalidApiResponse);
+  });
+
+  it("drops the exact capability and retries Timeline-only once when refresh returns REPLAY_NOT_FOUND", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const refresh = deferred<ReturnType<typeof artifactsManifest>>();
+    findReplayCapabilityForMatchMock.mockReturnValue(readyCapability());
+    prepareMatchEvidenceMock
+      .mockResolvedValueOnce(linkedReady())
+      .mockResolvedValueOnce(timelineOnlyReady());
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce(() => refresh.promise);
+
+    renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const image = await screen.findByRole("img");
+    image.dispatchEvent(new Event("error"));
+    await waitFor(() => expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2));
+
+    refresh.reject(new ApiClientError("REPLAY_NOT_FOUND", {}, false, SAFE_REQUEST_ID));
+
+    await waitFor(() => expect(removeReplayCapabilityMock).toHaveBeenCalledWith(REPLAY_ID));
+    await waitFor(() => expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(2));
+    expect(prepareMatchEvidenceMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        matchId: MATCH_ID,
+        puuid: PUUID,
+        platform: "NA1",
+        locale: "en-US",
+      }),
+    );
+    expect(prepareMatchEvidenceMock.mock.calls[1]?.[0]).not.toHaveProperty("replay");
+    expect(await screen.findByText(messages.evidenceTimelineOnly)).toBeVisible();
+    expect(screen.queryByText(messages.coverageFull)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.evidenceLinkedFrames)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("replay-artifact-gallery")).not.toBeInTheDocument();
+    expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(2);
+    expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a retryable alert when refresh returns a retryable ApiClientError", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const refresh = deferred<ReturnType<typeof artifactsManifest>>();
+    findReplayCapabilityForMatchMock.mockReturnValue(readyCapability());
+    prepareMatchEvidenceMock.mockResolvedValue(linkedReady());
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce(() => refresh.promise);
+
+    renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const image = await screen.findByRole("img");
+    image.dispatchEvent(new Event("error"));
+    await waitFor(() => expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2));
+
+    refresh.reject(
+      new ApiClientError("RIOT_RATE_LIMITED", { retry_after_seconds: 4 }, true, SAFE_REQUEST_ID),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(messages.riotRateLimited.replace("{seconds}", "4"));
+    expect(screen.getByRole("button", { name: messages.retry })).toBeVisible();
+    expect(removeReplayCapabilityMock).not.toHaveBeenCalled();
+    expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a non-retryable alert when refresh returns a non-retryable ApiClientError", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const refresh = deferred<ReturnType<typeof artifactsManifest>>();
+    findReplayCapabilityForMatchMock.mockReturnValue(readyCapability());
+    prepareMatchEvidenceMock.mockResolvedValue(linkedReady());
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce(() => refresh.promise);
+
+    renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const image = await screen.findByRole("img");
+    image.dispatchEvent(new Event("error"));
+    await waitFor(() => expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2));
+
+    refresh.reject(new ApiClientError("MATCH_EVIDENCE_UNSUPPORTED_MODE", {}, false, SAFE_REQUEST_ID));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(messages.matchEvidenceUnsupportedMode);
+    expect(screen.queryByRole("button", { name: messages.retry })).not.toBeInTheDocument();
+    expect(removeReplayCapabilityMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a retryable alert when refresh fails with an unknown network error", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const refresh = deferred<ReturnType<typeof artifactsManifest>>();
+    findReplayCapabilityForMatchMock.mockReturnValue(readyCapability());
+    prepareMatchEvidenceMock.mockResolvedValue(linkedReady());
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce(() => refresh.promise);
+
+    renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const image = await screen.findByRole("img");
+    image.dispatchEvent(new Event("error"));
+    await waitFor(() => expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2));
+
+    refresh.reject(new Error("socket hang up"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(messages.riotUnavailable);
+    expect(screen.getByRole("button", { name: messages.retry })).toBeVisible();
+    expect(removeReplayCapabilityMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale deferred refresh REPLAY_NOT_FOUND after match identity changes", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const refresh = deferred<ReturnType<typeof artifactsManifest>>();
+    findReplayCapabilityForMatchMock.mockReturnValue(readyCapability());
+    prepareMatchEvidenceMock.mockResolvedValue(linkedReady());
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce(() => refresh.promise);
+
+    const view = renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const image = await screen.findByRole("img");
+    image.dispatchEvent(new Event("error"));
+    await waitFor(() => expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2));
+
+    view.rerender(
+      <EvidenceSection matchId="NA1_other" puuid={PUUID} platform="NA1" locale="en-US" />,
+    );
+    expect(await screen.findByRole("button", { name: messages.prepareEvidence })).toBeVisible();
+
+    refresh.reject(new ApiClientError("REPLAY_NOT_FOUND", {}, false, SAFE_REQUEST_ID));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: messages.prepareEvidence })).toBeVisible();
+    });
+    expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(1);
+    expect(removeReplayCapabilityMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(messages.evidenceTimelineOnly)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("ignores a stale deferred refresh error after the same request is prepared again", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const refresh = deferred<ReturnType<typeof artifactsManifest>>();
+    const secondArtifactId = "dddddddd-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    findReplayCapabilityForMatchMock.mockReturnValue(readyCapability());
+    prepareMatchEvidenceMock
+      .mockResolvedValueOnce(linkedReady())
+      .mockResolvedValueOnce(
+        timelineOnlyReady({
+          windows: [
+            {
+              window_id: "evidence-window:second",
+              start_ms: 48_000,
+              end_ms: 68_000,
+              categories: ["combat_context"],
+              trigger_fact_ids: ["timeline:NA1:NA1_123456789:v1:frame:1:event:0"],
+              coverage: "full",
+              covered_game_start_ms: 48_000,
+              covered_game_end_ms: 68_000,
+              video_start_ms: 49_000,
+              video_end_ms: 69_000,
+              artifacts: [
+                {
+                  artifact_id: secondArtifactId,
+                  kind: "verification_frame",
+                  game_time_ms: 60_000,
+                  video_time_ms: 61_000,
+                },
+              ],
+            },
+          ],
+          replay_link: {
+            status: "linked",
+            full_count: 1,
+            partial_count: 0,
+            unavailable_count: 0,
+          },
+        }),
+      );
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce(() => refresh.promise)
+      .mockResolvedValueOnce({
+        artifacts: [
+          {
+            artifact_id: secondArtifactId,
+            replay_id: REPLAY_ID,
+            kind: "verification_frame",
+            game_time_ms: 60_000,
+            video_time_ms: 61_000,
+            media_type: "image/jpeg",
+            width: 1280,
+            height: 720,
+            size_bytes: 2048,
+            access: {
+              mode: "presigned",
+              url: "https://cdn.example/artifacts/second.jpg",
+              expires_at: "2026-08-01T15:05:00+00:00",
+            },
+          },
+        ],
+        request_id: SAFE_REQUEST_ID,
+      });
+
+    const view = renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const firstImage = await screen.findByRole("img");
+    firstImage.dispatchEvent(new Event("error"));
+    await waitFor(() => expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2));
+
+    view.rerender(<EvidenceSection matchId="NA1_other" puuid={PUUID} platform="NA1" locale="en-US" />);
+    view.rerender(
+      <EvidenceSection matchId={MATCH_ID} puuid={PUUID} platform="NA1" locale="en-US" />,
+    );
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    expect(await screen.findByRole("img")).toHaveAttribute(
+      "src",
+      "https://cdn.example/artifacts/second.jpg",
+    );
+
+    refresh.reject(new ApiClientError("REPLAY_NOT_FOUND", {}, false, SAFE_REQUEST_ID));
+    await waitFor(() =>
+      expect(screen.getByRole("img")).toHaveAttribute("src", "https://cdn.example/artifacts/second.jpg"),
+    );
+    expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(2);
+    expect(removeReplayCapabilityMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(messages.evidenceTimelineOnly)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("ignores a stale deferred refresh failure after unmount", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const refresh = deferred<ReturnType<typeof artifactsManifest>>();
+    findReplayCapabilityForMatchMock.mockReturnValue(readyCapability());
+    prepareMatchEvidenceMock.mockResolvedValue(linkedReady());
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce(() => refresh.promise);
+
+    const view = renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const image = await screen.findByRole("img");
+    image.dispatchEvent(new Event("error"));
+    await waitFor(() => expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2));
+    view.unmount();
+
+    refresh.reject(new Error("socket hang up"));
+    await waitFor(() => expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(1));
+    expect(removeReplayCapabilityMock).not.toHaveBeenCalled();
   });
 });

@@ -719,6 +719,195 @@ describe("joint evidence schemas and prepareMatchEvidence", () => {
     ).toBe(false);
   });
 
+  it("rejects full coverage whose covered interval is a proper subset of the window", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              coverage: "full",
+              covered_game_start_ms: 50_000,
+              covered_game_end_ms: 60_000,
+              video_start_ms: 51_000,
+              video_end_ms: 61_000,
+              artifacts: [
+                {
+                  artifact_id: EVIDENCE_ARTIFACT_ID,
+                  kind: "verification_frame",
+                  game_time_ms: 55_000,
+                  video_time_ms: 56_000,
+                },
+              ],
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects partial coverage whose covered interval equals the window", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              coverage: "partial",
+              covered_game_start_ms: 48_000,
+              covered_game_end_ms: 68_000,
+              video_start_ms: 49_000,
+              video_end_ms: 69_000,
+            }),
+          ],
+          replay_link: { status: "linked", full_count: 0, partial_count: 1, unavailable_count: 0 },
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects covered and video intervals of different duration", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              covered_game_start_ms: 48_000,
+              covered_game_end_ms: 68_000,
+              video_start_ms: 49_000,
+              video_end_ms: 80_000,
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects a window whose artifact offset disagrees with the covered/video offset", () => {
+    const window = evidenceWindow();
+    const artifact = {
+      ...(window.artifacts as Record<string, unknown>[])[0],
+      game_time_ms: 60_000,
+      video_time_ms: 60_000,
+    };
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({ windows: [{ ...window, artifacts: [artifact] }] }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects linked available windows that use different game-to-video offsets", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow(),
+            evidenceWindow({
+              window_id: "evidence-window:second",
+              start_ms: 80_000,
+              end_ms: 100_000,
+              covered_game_start_ms: 80_000,
+              covered_game_end_ms: 100_000,
+              video_start_ms: 82_000,
+              video_end_ms: 102_000,
+              artifacts: [
+                {
+                  artifact_id: EVIDENCE_ARTIFACT_ID,
+                  kind: "verification_frame",
+                  game_time_ms: 90_000,
+                  video_time_ms: 92_000,
+                },
+              ],
+            }),
+          ],
+          total_window_count: 2,
+          replay_link: { status: "linked", full_count: 2, partial_count: 0, unavailable_count: 0 },
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("accepts mixed full, partial, and unavailable windows that share one offset", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow(),
+            evidenceWindow({
+              window_id: "evidence-window:partial",
+              start_ms: 80_000,
+              end_ms: 100_000,
+              coverage: "partial",
+              covered_game_start_ms: 80_000,
+              covered_game_end_ms: 90_000,
+              video_start_ms: 81_000,
+              video_end_ms: 91_000,
+              artifacts: [
+                {
+                  artifact_id: EVIDENCE_ARTIFACT_ID,
+                  kind: "verification_frame",
+                  game_time_ms: 85_000,
+                  video_time_ms: 86_000,
+                },
+              ],
+            }),
+            evidenceWindow({
+              window_id: "evidence-window:unavailable",
+              start_ms: 200_000,
+              end_ms: 220_000,
+              coverage: "unavailable",
+              covered_game_start_ms: null,
+              covered_game_end_ms: null,
+              video_start_ms: null,
+              video_end_ms: null,
+              artifacts: [],
+            }),
+          ],
+          total_window_count: 3,
+          replay_link: { status: "linked", full_count: 1, partial_count: 1, unavailable_count: 1 },
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("does not compare game-to-video offsets on unavailable windows", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              coverage: "unavailable",
+              covered_game_start_ms: null,
+              covered_game_end_ms: null,
+              video_start_ms: null,
+              video_end_ms: null,
+              artifacts: [],
+            }),
+            evidenceWindow({
+              window_id: "evidence-window:available",
+              start_ms: 80_000,
+              end_ms: 100_000,
+              coverage: "full",
+              covered_game_start_ms: 80_000,
+              covered_game_end_ms: 100_000,
+              video_start_ms: 83_000,
+              video_end_ms: 103_000,
+              artifacts: [
+                {
+                  artifact_id: EVIDENCE_ARTIFACT_ID,
+                  kind: "verification_frame",
+                  game_time_ms: 90_000,
+                  video_time_ms: 93_000,
+                },
+              ],
+            }),
+          ],
+          total_window_count: 2,
+          replay_link: { status: "linked", full_count: 1, partial_count: 0, unavailable_count: 1 },
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
   it("rejects an inverted video interval", () => {
     expect(
       jointEvidenceResponseSchema.safeParse(

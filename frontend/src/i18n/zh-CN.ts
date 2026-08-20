@@ -81,7 +81,7 @@ export const zhCN: Messages = {
   blueTeam: "蓝色方",
   redTeam: "红色方",
   unsupportedQueue: "不支持的队列",
-  dataOnlyScopeNotice: "仅展示已记录的对局数据；尚未评估站位、操作、意识、意图或因果关系。",
+  dataOnlyScopeNotice: "仅展示已记录的对局数据。尚未生成任何教练结论。",
   matchDetailUnsupportedMode: "该模式暂不支持对局详情。",
   language: "语言",
   disclaimer:

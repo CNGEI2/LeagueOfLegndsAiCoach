@@ -78,6 +78,43 @@ describe("joint evidence bilingual keys", () => {
   const coachingLeakPattern =
     /mistake|good play|bad play|score|blame|awareness|mechanics|intent|caused by|therefore|失误|好操作|坏操作|评分|指责|意识|操作|意图|导致|因此/i;
 
+  const matchPageDisplayedKeys = [
+    "dataOnlyScopeNotice",
+    "loadingMatchDetail",
+    "matchDetails",
+    "matchId",
+    "noMatches",
+    "blueTeam",
+    "redTeam",
+    "staticDataUnavailable",
+    "champion",
+    "championAlt",
+    "cs",
+    "damage",
+    "gold",
+    "item",
+    "itemAlt",
+    "kda",
+    "participantLabel",
+    "playerIdentity",
+    "role",
+    "selectedPlayer",
+    "unknownStatistic",
+    "vision",
+    "replayNoAiNotice",
+    "uploadReplay",
+    "replayPartialCoverage",
+    "replayTokenStorageNotice",
+    "verificationFrame",
+    "anchorFrame",
+    "verificationFrameAlt",
+    "anchorFrameAlt",
+    "replayStageReady",
+    "replayFileLabel",
+    "replayRightsLabel",
+    "replaySetGameZero",
+  ] as const;
+
   const requiredKeys = [
     "prepareEvidence",
     "preparingEvidence",
@@ -165,6 +202,22 @@ describe("joint evidence bilingual keys", () => {
       expect(en[key]).not.toMatch(coachingLeakPattern);
       expect(zh[key]).not.toMatch(coachingLeakPattern);
     }
+  });
+
+  it("keeps match-page copy actually shown with Evidence free of coaching conclusions", () => {
+    const en = getMessages("en-US") as Record<string, string>;
+    const zh = getMessages("zh-CN") as Record<string, string>;
+    const keys = [...new Set([...requiredKeys, ...matchPageDisplayedKeys])];
+
+    for (const key of keys) {
+      expect(en[key], `missing en key ${key}`).toEqual(expect.any(String));
+      expect(zh[key], `missing zh key ${key}`).toEqual(expect.any(String));
+      expect(en[key], `en ${key}`).not.toMatch(coachingLeakPattern);
+      expect(zh[key], `zh ${key}`).not.toMatch(coachingLeakPattern);
+    }
+
+    expect(en.dataOnlyScopeNotice).not.toMatch(/mechanics|awareness|intent|causality/i);
+    expect(zh.dataOnlyScopeNotice).not.toMatch(/操作|意识|意图|因果/);
   });
 
   it("spot-checks Chinese values are nonempty for core evidence labels", () => {

@@ -160,7 +160,9 @@ describe("MatchDetailClient", () => {
     expect(await screen.findByRole("heading", { name: /match details/i })).toBeVisible();
     expect(screen.getAllByRole("row")).toHaveLength(12);
     expect(screen.getByText("Selected player").closest("tr")).toHaveAttribute("data-selected", "true");
-    expect(screen.getByText(/recorded match data only/i)).toBeVisible();
+    const notice = screen.getByRole("note");
+    expect(notice).toHaveTextContent(/recorded match data only/i);
+    expect(notice.textContent).not.toMatch(/mechanics|awareness|intent|causality/i);
     expect(screen.queryByRole("button", { name: /generate review/i })).not.toBeInTheDocument();
     expect(screen.getByAltText("Champion: Ahri")).toHaveAttribute("src", "https://cdn.example/champions/103.png");
     expect(screen.getAllByAltText("Item: Doran's Blade")).not.toHaveLength(0);
@@ -215,6 +217,7 @@ describe("MatchDetailClient", () => {
     expect(await screen.findByRole("heading", { name: "对局详情" })).toBeVisible();
     expect(screen.getAllByText(/^玩家 [1-5]$/)).toHaveLength(9);
     expect(screen.getByText("已选择玩家").closest("tr")).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("note").textContent).not.toMatch(/操作|意识|意图|因果/);
   });
 
   it("keeps numeric data visible when static data is unavailable", async () => {

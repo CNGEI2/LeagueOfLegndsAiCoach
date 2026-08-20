@@ -81,7 +81,7 @@ export const enUS = {
   redTeam: "Red team",
   unsupportedQueue: "Unsupported queue",
   dataOnlyScopeNotice:
-    "Recorded match data only. Positioning, mechanics, awareness, intent, and causality have not been evaluated.",
+    "Recorded match data only. No coaching conclusion has been generated.",
   matchDetailUnsupportedMode: "Match details are not supported for this mode.",
   language: "Language",
   disclaimer:

@@ -338,6 +338,55 @@ export function EvidenceSection({
     }
   }
 
+  function evidenceErrorState(error: unknown): Extract<EvidenceState, { status: "error" }> {
+    if (error instanceof ApiClientError) {
+      return {
+        status: "error",
+        code: error.code,
+        params: error.params,
+        retryable: error.retryable,
+      };
+    }
+    return {
+      status: "error",
+      code: "NETWORK_ERROR",
+      params: {},
+      retryable: true,
+    };
+  }
+
+  function isCurrentRequest(requestKey: number, signal?: AbortSignal) {
+    return !signal?.aborted && requestKey === requestKeyRef.current;
+  }
+
+  async function retryTimelineOnlyFromRefresh(originRequestKey: number) {
+    if (!isCurrentRequest(originRequestKey)) return;
+    const fallbackKey = requestKeyRef.current + 1;
+    requestKeyRef.current = fallbackKey;
+    refreshAbortRef.current?.abort();
+    refreshAbortRef.current = null;
+    prepareAbortRef.current?.abort();
+    const controller = new AbortController();
+    prepareAbortRef.current = controller;
+    setState({ status: "loading" });
+    try {
+      const evidence = await prepareEvidence(null, controller.signal);
+      if (!isCurrentRequest(fallbackKey, controller.signal)) return;
+      setState({
+        status: "ready",
+        evidence,
+        linkedArtifacts: [],
+        accessToken: null,
+        replayId: null,
+        requestKey: fallbackKey,
+      });
+    } catch (error) {
+      if (!isCurrentRequest(fallbackKey, controller.signal)) return;
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setState(evidenceErrorState(error));
+    }
+  }
+
   function refreshLinkedArtifacts() {
     if (state.status !== "ready" || !state.accessToken || !state.replayId) return;
     const { accessToken, replayId, evidence, requestKey } = state;
@@ -346,7 +395,7 @@ export function EvidenceSection({
     refreshAbortRef.current = controller;
     void getReplayArtifacts({ replayId, accessToken }, controller.signal)
       .then((manifest) => {
-        if (controller.signal.aborted || requestKey !== requestKeyRef.current) return;
+        if (!isCurrentRequest(requestKey, controller.signal)) return;
         const referencedIds = new Set(
           evidence.windows.flatMap((window) =>
             window.artifacts.map((artifact) => artifact.artifact_id),
@@ -364,7 +413,17 @@ export function EvidenceSection({
           };
         });
       })
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        if (!isCurrentRequest(requestKey, controller.signal)) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (error instanceof ApiClientError && error.code === "REPLAY_NOT_FOUND") {
+          removeReplayCapability(replayId);
+          if (!isCurrentRequest(requestKey, controller.signal)) return;
+          void retryTimelineOnlyFromRefresh(requestKey);
+          return;
+        }
+        setState(evidenceErrorState(error));
+      });
   }
 
   return (
