@@ -33,6 +33,12 @@ _SUPPORTED_EVENT_TYPE_TO_KIND: dict[str, SupportedEventKind] = {
     "ITEM_DESTROYED": "item_destroyed",
     "ITEM_UNDO": "item_undo",
 }
+_ZERO_ACTOR_ITEM_KINDS = frozenset({"item_purchased", "item_sold", "item_destroyed", "item_undo"})
+
+
+def _is_zero_actor_item_event(event: TimelineEventDto) -> bool:
+    kind = _SUPPORTED_EVENT_TYPE_TO_KIND.get(event.type)
+    return kind in _ZERO_ACTOR_ITEM_KINDS and event.participant_id == 0
 
 
 @dataclass(frozen=True)
@@ -71,7 +77,7 @@ class TimelineNormalizer:
 
             for event_index, event in enumerate(frame.events):
                 kind = _SUPPORTED_EVENT_TYPE_TO_KIND.get(event.type)
-                if kind is None:
+                if kind is None or _is_zero_actor_item_event(event):
                     ignored_event_count += 1
                     continue
                 facts.append(

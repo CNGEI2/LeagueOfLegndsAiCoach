@@ -8,7 +8,9 @@ from app.core.config import Settings
 from app.core.errors import ApiError
 from app.core.metrics import MetricsRegistry
 from app.core.routing import Platform
+from app.services.riot.dto import validate_timeline_payload
 from app.services.timelines.service import TimelineService
+from tests.fixtures.riot_payloads import timeline_payload_for_normalizer
 from tests.test_timeline_service import (
     FakeTimelineGateway,
     FakeTimelineRepository,
@@ -259,3 +261,56 @@ async def test_repository_write_failure_records_internal_error_and_available_fet
     assert metrics.joint_evidence_timeline_fetch_duration_seconds.sum(outcome="available") == 0.5
     assert metrics.joint_evidence_timeline_events_total.samples() == []
     assert metrics.joint_evidence_timeline_cache_total.value(status="miss") == 1.0
+
+
+class _ZeroActorItemGateway(FakeTimelineGateway):
+    async def get_match_timeline(self, *, platform: Platform, match_id: str):
+        self.calls.append((platform, match_id))
+        payload = timeline_payload_for_normalizer(match_id=match_id)
+        payload["info"]["frames"][0]["events"][0:0] = [
+            {
+                "type": "ITEM_PURCHASED",
+                "timestamp": 100,
+                "participantId": 0,
+                "itemId": 2003,
+            },
+            {
+                "type": "ITEM_SOLD",
+                "timestamp": 200,
+                "participantId": 0,
+                "itemId": 1001,
+            },
+        ]
+        return validate_timeline_payload(payload, match_id=match_id)
+
+
+@pytest.mark.asyncio
+async def test_zero_actor_item_events_are_counted_only_as_unknown_ignored() -> None:
+    metrics = MetricsRegistry()
+    service, _, _, _ = make_service(gateway=_ZeroActorItemGateway(), metrics=metrics)
+
+    await service.get_timeline(platform=Platform.NA1, match_id="NA1_fixture")
+
+    assert (
+        metrics.joint_evidence_timeline_events_total.value(event_type="unknown", result="ignored")
+        == 3.0
+    )
+    assert (
+        metrics.joint_evidence_timeline_events_total.value(
+            event_type="item_purchased", result="supported"
+        )
+        == 1.0
+    )
+    assert (
+        metrics.joint_evidence_timeline_events_total.value(
+            event_type="item_sold", result="supported"
+        )
+        == 1.0
+    )
+    for event_type in ("item_purchased", "item_sold", "item_destroyed", "item_undo"):
+        assert (
+            metrics.joint_evidence_timeline_events_total.value(
+                event_type=event_type, result="ignored"
+            )
+            == 0.0
+        )

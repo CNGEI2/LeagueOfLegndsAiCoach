@@ -855,3 +855,72 @@ async def test_gateway_timeline_maps_read_timeout_to_unavailable() -> None:
     assert caught.value.code == "RIOT_UNAVAILABLE"
     assert caught.value.retryable is True
     assert "upstream read timeout" not in caught.value.message
+
+
+_SYSTEM_ITEM_EVENTS = (
+    {"type": "ITEM_PURCHASED", "timestamp": 1, "participantId": 0, "itemId": 1055},
+    {"type": "ITEM_SOLD", "timestamp": 1, "participantId": 0, "itemId": 1001},
+    {"type": "ITEM_DESTROYED", "timestamp": 1, "participantId": 0, "itemId": 2003},
+    {"type": "ITEM_UNDO", "timestamp": 1, "participantId": 0, "beforeId": 1055, "afterId": 0},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", _SYSTEM_ITEM_EVENTS)
+async def test_gateway_accepts_system_item_events_with_participant_id_zero(
+    event: dict[str, object],
+) -> None:
+    payload = copy.deepcopy(TIMELINE_PAYLOAD)
+    payload["info"]["frames"][0]["events"].insert(0, copy.deepcopy(event))
+
+    timeline = await _fetch_timeline(payload)
+    parsed = timeline.info.frames[0].events[0]
+
+    assert parsed.type == event["type"]
+    assert parsed.participant_id == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [-1, True, 1.0, "0", "1"])
+async def test_gateway_rejects_non_strict_or_negative_item_participant_ids(
+    bad_value: object,
+) -> None:
+    await _reject_timeline(
+        lambda payload: payload["info"]["frames"][0]["events"][0].__setitem__(
+            "participantId",
+            bad_value,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_missing_item_participant_id() -> None:
+    await _reject_timeline(
+        lambda payload: payload["info"]["frames"][0]["events"][0].pop("participantId")
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_item_participant_id_outside_roster() -> None:
+    await _reject_timeline(
+        lambda payload: payload["info"]["frames"][0]["events"][0].__setitem__(
+            "participantId",
+            99,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_zero_participant_exemption_is_limited_to_item_events() -> None:
+    await _reject_timeline(
+        lambda payload: payload["info"]["frames"][0]["participantFrames"]["1"].__setitem__(
+            "participantId",
+            0,
+        )
+    )
+    await _reject_timeline(
+        lambda payload: payload["info"]["frames"][1]["events"][0].__setitem__(
+            "assistingParticipantIds",
+            [0],
+        )
+    )

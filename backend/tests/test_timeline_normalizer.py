@@ -485,3 +485,54 @@ def test_participant_ids_come_from_metadata_order() -> None:
     assert result.snapshot.match_id == "NA1_fixture"
     assert result.snapshot.schema_version == 1
     assert result.snapshot.frame_interval_ms == 60_000
+
+
+def _payload_with_system_item_events() -> dict[str, object]:
+    payload = timeline_payload_for_normalizer()
+    events = payload["info"]["frames"][0]["events"]
+    events[0:0] = [
+        {
+            "type": "ITEM_PURCHASED",
+            "timestamp": 100,
+            "participantId": 0,
+            "itemId": 2003,
+        },
+        {
+            "type": "ITEM_DESTROYED",
+            "timestamp": 200,
+            "participantId": 0,
+            "itemId": 1001,
+        },
+    ]
+    return payload
+
+
+def test_normalizer_ignores_system_item_events_without_renumbering() -> None:
+    baseline = _normalize()
+    payload = _payload_with_system_item_events()
+    result = _normalize(payload)
+    repeated = _normalize(copy.deepcopy(payload))
+
+    assert result.ignored_event_count == baseline.ignored_event_count + 2
+    assert (
+        result.supported_event_counts["item_purchased"]
+        == baseline.supported_event_counts["item_purchased"]
+    )
+    assert (
+        result.supported_event_counts["item_destroyed"]
+        == baseline.supported_event_counts["item_destroyed"]
+    )
+    purchased = next(
+        fact
+        for fact in result.snapshot.facts
+        if isinstance(fact, ItemEventFact) and fact.kind == "item_purchased"
+    )
+    assert purchased.event_index == 2
+    assert purchased.fact_id == "timeline:NA1:NA1_fixture:v1:frame:0:event:2"
+    assert purchased.participant_id == 1
+    assert not any(
+        isinstance(fact, ItemEventFact) and fact.participant_id == 0
+        for fact in result.snapshot.facts
+    )
+    assert result.snapshot_hash == repeated.snapshot_hash
+    assert result.snapshot == repeated.snapshot

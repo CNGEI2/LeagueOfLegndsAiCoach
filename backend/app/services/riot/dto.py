@@ -12,6 +12,14 @@ from pydantic import (
 
 from app.core.errors import ApiError
 
+_ITEM_EVENT_TYPES = frozenset(
+    {
+        "ITEM_PURCHASED",
+        "ITEM_SOLD",
+        "ITEM_DESTROYED",
+        "ITEM_UNDO",
+    }
+)
 _SUPPORTED_TIMELINE_EVENT_TYPES = frozenset(
     {
         "CHAMPION_KILL",
@@ -191,12 +199,12 @@ class TimelineEventDto(RiotDto):
             if self.building_type is None:
                 raise ValueError("building kill requires buildingType")
         elif event_type in {"ITEM_PURCHASED", "ITEM_SOLD", "ITEM_DESTROYED"}:
-            if self.participant_id is None or self.participant_id < 1:
+            if self.participant_id is None or self.participant_id < 0:
                 raise ValueError("item event requires participantId")
             if self.item_id is None:
                 raise ValueError("item event requires itemId")
         elif event_type == "ITEM_UNDO":
-            if self.participant_id is None or self.participant_id < 1:
+            if self.participant_id is None or self.participant_id < 0:
                 raise ValueError("item undo requires participantId")
             if self.before_id is None or self.after_id is None:
                 raise ValueError("item undo requires beforeId and afterId")
@@ -380,7 +388,11 @@ def _assert_event_participant_refs(event: TimelineEventDto, *, known_ids: set[in
         raise ValueError("event killerId references unknown participant")
     if event.victim_id is not None and event.victim_id not in known_ids:
         raise ValueError("event victimId references unknown participant")
-    if event.participant_id is not None and event.participant_id not in known_ids:
+    if (
+        event.participant_id is not None
+        and event.participant_id not in known_ids
+        and not (event.participant_id == 0 and event.type in _ITEM_EVENT_TYPES)
+    ):
         raise ValueError("event participantId references unknown participant")
     if event.assisting_participant_ids is not None:
         if len(event.assisting_participant_ids) != len(set(event.assisting_participant_ids)):
