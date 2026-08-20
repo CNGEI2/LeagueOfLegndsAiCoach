@@ -94,24 +94,6 @@ class JointEvidenceService:
     WINDOW_RESULTS = frozenset({"planned"})
     TRUNCATION_RESULTS = frozenset({"truncated", "not_truncated"})
     COVERAGE_LABELS = frozenset({"full", "partial", "unavailable"})
-    API_OUTCOMES = frozenset({"ready", "error"})
-    API_ERROR_CODES = frozenset(
-        {
-            "none",
-            "NOT_FOUND",
-            "MATCH_NOT_FOUND",
-            "PLAYER_NOT_IN_MATCH",
-            "MATCH_EVIDENCE_UNSUPPORTED_MODE",
-            "MATCH_TIMELINE_NOT_FOUND",
-            "REPLAY_NOT_FOUND",
-            "REPLAY_EVIDENCE_NOT_READY",
-            "RIOT_AUTH_FAILED",
-            "RIOT_RATE_LIMITED",
-            "RIOT_INVALID_RESPONSE",
-            "RIOT_UNAVAILABLE",
-            "VALIDATION_ERROR",
-        }
-    )
 
     def __init__(
         self,
@@ -137,13 +119,7 @@ class JointEvidenceService:
         request: JointEvidenceRequest,
         replay_token: str | None,
     ) -> JointEvidenceData:
-        try:
-            return await self._prepare(
-                match_id=match_id, request=request, replay_token=replay_token
-            )
-        except ApiError as error:
-            self._observe_api_error(error.code)
-            raise
+        return await self._prepare(match_id=match_id, request=request, replay_token=replay_token)
 
     async def _prepare(
         self,
@@ -235,13 +211,6 @@ class JointEvidenceService:
         )
         for window in windows:
             self._metrics.joint_evidence_replay_coverage_total.inc(coverage=window.coverage)
-        self._metrics.joint_evidence_api_requests_total.inc(outcome="ready", error_code="none")
-
-    def _observe_api_error(self, error_code: str) -> None:
-        code = error_code if error_code in self.API_ERROR_CODES else "NOT_FOUND"
-        if code == "none":
-            code = "NOT_FOUND"
-        self._metrics.joint_evidence_api_requests_total.inc(outcome="error", error_code=code)
 
 
 def _join_rosters(

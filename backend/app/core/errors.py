@@ -6,6 +6,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from app.core.metrics import (
+    is_joint_evidence_prepare_request,
+    record_joint_evidence_api_request,
+)
 from app.schemas.errors import ErrorDetail, ErrorResponse
 
 
@@ -138,6 +142,7 @@ def _error_response(
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
+    _record_joint_evidence_api_error(request=request, error_code=code)
     response = ErrorResponse(
         error=ErrorDetail(
             code=code,
@@ -148,6 +153,15 @@ def _error_response(
         )
     )
     return JSONResponse(status_code=status_code, content=response.model_dump(), headers=headers)
+
+
+def _record_joint_evidence_api_error(*, request: Request, error_code: str) -> None:
+    if not is_joint_evidence_prepare_request(method=request.method, path=request.url.path):
+        return
+    registry = getattr(request.app.state, "replay_metrics", None)
+    if registry is None:
+        return
+    record_joint_evidence_api_request(registry, outcome="error", error_code=error_code)
 
 
 async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:

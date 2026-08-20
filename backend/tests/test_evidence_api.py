@@ -392,6 +392,9 @@ def test_evidence_success_body_is_strict(
         "Basic not-a-bearer",
         "Bearer ",
         "Bearer tok en",
+        "Bearer token ",
+        " Bearer abc.def",
+        "Bearer\tabc.def",
         "Bearer " + ("x" * 513),
     ],
 )
@@ -412,6 +415,37 @@ def test_evidence_replay_bearer_rejects_malformed_empty_and_oversized(
     assert joint.calls == []
     assert authorization not in response.text
     assert authorization not in response.json()["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "authorization_template",
+    [
+        "Bearer {token}",
+        "bearer {token}",
+        "Bearer  {token}",
+    ],
+)
+def test_evidence_replay_accepts_strict_space_separated_bearer_formats(
+    evidence_client: tuple[TestClient, FakeJointEvidenceService],
+    authorization_template: str,
+) -> None:
+    import hmac
+
+    client, joint = evidence_client
+    token = "capability-token-value"
+    replay_id = str(uuid4())
+    authorization = authorization_template.format(token=token)
+    response = client.post(
+        f"/api/v1/matches/{MATCH_ID}/evidence",
+        json={"platform": "NA1", "puuid": PUUID, "replay_id": replay_id},
+        headers={"Authorization": authorization},
+    )
+    assert response.status_code == 200
+    assert len(joint.calls) == 1
+    received = joint.calls[0]["replay_token"]
+    assert isinstance(received, str)
+    assert hmac.compare_digest(received, token)
+    assert token not in response.text
 
 
 def test_evidence_replay_accepts_exact_512_byte_bearer_without_leaking_token(

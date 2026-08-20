@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, Path, Query, Request
 from app.core.dependencies import AppServices, get_services
 from app.core.errors import ApiError, replay_not_found
 from app.core.logging import bind_safe_request_context
+from app.core.metrics import record_joint_evidence_api_request
 from app.core.routing import Platform
 from app.schemas.domain import Locale
 from app.schemas.evidence import JointEvidenceRequest, JointEvidenceResponse
@@ -50,6 +51,9 @@ async def prepare_match_evidence(
         request=body,
         replay_token=replay_token,
     )
+    registry = getattr(request.app.state, "replay_metrics", None)
+    if registry is not None:
+        record_joint_evidence_api_request(registry, outcome="ready", error_code="none")
     return JointEvidenceResponse(**data.model_dump(), request_id=request.state.request_id)
 
 

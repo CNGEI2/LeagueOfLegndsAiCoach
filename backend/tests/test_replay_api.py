@@ -122,6 +122,8 @@ class ControllableReplayService:
         self.status_result = _status_data()
         self.authorize_row = _upload_row()
         self.authorize_error: ApiError | None = None
+        self.valid_token = TOKEN
+        self.authorize_calls: list[dict[str, object]] = []
         self.complete_calls = 0
         self.retry_calls = 0
         self.delete_calls = 0
@@ -159,9 +161,10 @@ class ControllableReplayService:
         return self.create_result
 
     async def authorize(self, replay_id: UUID, token: str) -> ReplayUploadRow:
+        self.authorize_calls.append({"replay_id": replay_id, "token": token})
         if self.authorize_error is not None:
             raise self.authorize_error
-        if token != TOKEN or replay_id != REPLAY_ID:
+        if token != self.valid_token or replay_id != REPLAY_ID:
             raise ApiError(
                 status_code=404,
                 code="REPLAY_NOT_FOUND",
@@ -331,6 +334,10 @@ def test_wrong_bearer_token_returns_replay_not_found(
         {"Authorization": "Bearer"},
         {"Authorization": "Bearer "},
         {"Authorization": "Bearer " + ("t" * 513)},
+        {"Authorization": "Bearer\t" + TOKEN},
+        {"Authorization": " Bearer " + TOKEN},
+        {"Authorization": f"Bearer {TOKEN} "},
+        {"Authorization": "Bearer tok en"},
     ],
 )
 def test_illegal_bearer_formats_return_replay_not_found(
@@ -340,6 +347,54 @@ def test_illegal_bearer_formats_return_replay_not_found(
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "REPLAY_NOT_FOUND"
+    authorization = headers.get("Authorization")
+    if authorization is not None:
+        assert authorization not in response.text
+        assert TOKEN not in response.text
+        assert TOKEN not in response.json()["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        f"Bearer {TOKEN}",
+        f"bearer {TOKEN}",
+        f"Bearer  {TOKEN}",
+    ],
+)
+def test_accepted_bearer_formats_reach_replay_service(
+    replay_client: TestClient,
+    replay_service: ControllableReplayService,
+    authorization: str,
+) -> None:
+    response = replay_client.get(
+        f"/api/v1/replays/{REPLAY_ID}",
+        headers={"Authorization": authorization},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["replay_id"] == str(REPLAY_ID)
+    assert TOKEN not in response.text
+    assert len(replay_service.authorize_calls) >= 1
+
+
+def test_exact_512_byte_bearer_accepted_by_replay_api(
+    replay_client: TestClient,
+    replay_service: ControllableReplayService,
+) -> None:
+    import hmac
+
+    token = "r" * 512
+    replay_service.valid_token = token
+    response = replay_client.get(
+        f"/api/v1/replays/{REPLAY_ID}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    received = replay_service.authorize_calls[-1]["token"]
+    assert isinstance(received, str)
+    assert hmac.compare_digest(received, token)
+    assert token not in response.text
 
 
 def test_complete_is_idempotent_at_api_layer(

@@ -36,12 +36,26 @@ def test_parse_bearer_token_accepts_valid_bearer_and_rejects_invalid() -> None:
     accepted = parse_bearer_token("Bearer abc.def")
     assert isinstance(accepted, str)
     assert hmac.compare_digest(accepted, "abc.def")
+
+    lowercase = parse_bearer_token("bearer abc.def", required=True)
+    assert isinstance(lowercase, str)
+    assert hmac.compare_digest(lowercase, "abc.def")
+
+    multi_space = parse_bearer_token("Bearer  abc.def", required=True)
+    assert isinstance(multi_space, str)
+    assert hmac.compare_digest(multi_space, "abc.def")
+
     assert parse_bearer_token(None) is None
 
     _assert_replay_not_found("Basic abc")
+    _assert_replay_not_found("Bearer")
     _assert_replay_not_found("Bearer ")
     _assert_replay_not_found("Bearer tok en")
     _assert_replay_not_found("Bearer token ")
+    _assert_replay_not_found(" Bearer abc.def")
+    _assert_replay_not_found("\tBearer abc.def")
+    _assert_replay_not_found("Bearer\tabc.def")
+    _assert_replay_not_found("Bearer\u00a0abc.def")
     _assert_replay_not_found("Bearer café")
     _assert_replay_not_found("Bearer " + ("x" * 513))
 
@@ -58,3 +72,23 @@ def test_parse_bearer_token_accepts_valid_bearer_and_rejects_invalid() -> None:
     assert isinstance(parsed, str)
     assert hmac.compare_digest(parsed, exact)
     assert "Bearer " + exact not in repr(parsed)
+
+
+def test_parse_bearer_token_rejects_tab_separator_without_leaking_token() -> None:
+    token = "secret-token68value"
+    authorization = f"Bearer\t{token}"
+    with pytest.raises(ApiError) as raised:
+        parse_bearer_token(authorization, required=True)
+    assert raised.value.code == "REPLAY_NOT_FOUND"
+    assert token not in raised.value.message
+    assert authorization not in raised.value.message
+
+
+def test_parse_bearer_token_rejects_leading_whitespace_without_leaking_token() -> None:
+    token = "secret-token68value"
+    authorization = f" Bearer {token}"
+    with pytest.raises(ApiError) as raised:
+        parse_bearer_token(authorization, required=True)
+    assert raised.value.code == "REPLAY_NOT_FOUND"
+    assert token not in raised.value.message
+    assert authorization not in raised.value.message

@@ -554,5 +554,6 @@ async def test_roster_set_mismatch_returns_safe_riot_invalid_response() -> None:
         registry.joint_evidence_api_requests_total.value(
             outcome="error", error_code="RIOT_INVALID_RESPONSE"
         )
-        == 1.0
+        == 0.0
     )
+    assert list(registry.joint_evidence_api_requests_total.samples()) == []

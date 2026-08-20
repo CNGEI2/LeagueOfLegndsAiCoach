@@ -55,6 +55,55 @@ _DETECTION_DURATION_BUCKETS: tuple[float, ...] = (
 )
 _TIMELINE_FETCH_DURATION_BUCKETS: tuple[float, ...] = _DETECTION_DURATION_BUCKETS
 
+JOINT_EVIDENCE_API_OUTCOMES = frozenset({"ready", "error"})
+JOINT_EVIDENCE_API_ERROR_CODES = frozenset(
+    {
+        "none",
+        "NOT_FOUND",
+        "MATCH_NOT_FOUND",
+        "PLAYER_NOT_IN_MATCH",
+        "MATCH_EVIDENCE_UNSUPPORTED_MODE",
+        "MATCH_TIMELINE_NOT_FOUND",
+        "REPLAY_NOT_FOUND",
+        "REPLAY_EVIDENCE_NOT_READY",
+        "RIOT_AUTH_FAILED",
+        "RIOT_RATE_LIMITED",
+        "RIOT_INVALID_RESPONSE",
+        "RIOT_UNAVAILABLE",
+        "VALIDATION_ERROR",
+    }
+)
+
+
+def is_joint_evidence_prepare_request(*, method: str, path: str) -> bool:
+    if method != "POST":
+        return False
+    parts = path.strip("/").split("/")
+    return (
+        len(parts) == 5
+        and parts[0] == "api"
+        and parts[1] == "v1"
+        and parts[2] == "matches"
+        and parts[4] == "evidence"
+        and bool(parts[3])
+    )
+
+
+def record_joint_evidence_api_request(
+    registry: MetricsRegistry,
+    *,
+    outcome: str,
+    error_code: str,
+) -> None:
+    safe_outcome = outcome if outcome in JOINT_EVIDENCE_API_OUTCOMES else "error"
+    if safe_outcome == "ready":
+        safe_code = "none"
+    elif error_code in JOINT_EVIDENCE_API_ERROR_CODES and error_code != "none":
+        safe_code = error_code
+    else:
+        safe_code = "NOT_FOUND"
+    registry.joint_evidence_api_requests_total.inc(outcome=safe_outcome, error_code=safe_code)
+
 
 def _label_key(labels: dict[str, str]) -> str:
     return "\x1f".join(f"{key}={value}" for key, value in sorted(labels.items()))
@@ -300,4 +349,14 @@ def _format_labels(labels: dict[str, str]) -> str:
 
 metrics = MetricsRegistry()
 
-__all__ = ["Counter", "Gauge", "Histogram", "MetricsRegistry", "metrics"]
+__all__ = [
+    "Counter",
+    "Gauge",
+    "Histogram",
+    "JOINT_EVIDENCE_API_ERROR_CODES",
+    "JOINT_EVIDENCE_API_OUTCOMES",
+    "MetricsRegistry",
+    "is_joint_evidence_prepare_request",
+    "metrics",
+    "record_joint_evidence_api_request",
+]
