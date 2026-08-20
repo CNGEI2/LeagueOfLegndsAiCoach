@@ -342,6 +342,31 @@ def test_evidence_api_does_not_double_count_when_service_also_observes() -> None
         assert _api_request_total(registry) == 1.0
 
 
+def test_evidence_api_counts_once_when_public_response_validation_fails() -> None:
+    joint = FakeJointEvidenceService()
+    joint.data = joint.data.model_construct(**{**joint.data.model_dump(), "schema_version": 2})
+    with _client_with_metrics(joint=joint)[0] as client:
+        registry = client.app.state.replay_metrics
+        response = client.post(
+            f"/api/v1/matches/{MATCH_ID}/evidence",
+            json={"platform": "NA1", "puuid": PUUID},
+        )
+        assert response.status_code == 500
+        assert response.json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
+        assert (
+            registry.joint_evidence_api_requests_total.value(outcome="ready", error_code="none")
+            == 0.0
+        )
+        assert _api_request_total(registry) == 1.0
+        rendered = registry.render_prometheus_text()
+        for banned in ("puuid", "match_id", "token", "NA1_", "artifact", PUUID, MATCH_ID):
+            assert banned not in rendered
+        for labels, _value in registry.joint_evidence_api_requests_total.samples():
+            assert set(labels) <= {"outcome", "error_code"}
+            assert labels["outcome"] in metrics_module.JOINT_EVIDENCE_API_OUTCOMES
+            assert labels["error_code"] in metrics_module.JOINT_EVIDENCE_API_ERROR_CODES
+
+
 def _api_request_total(registry: MetricsRegistry) -> float:
     total = 0.0
     for labels, value in registry.joint_evidence_api_requests_total.samples():

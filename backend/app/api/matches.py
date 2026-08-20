@@ -51,10 +51,11 @@ async def prepare_match_evidence(
         request=body,
         replay_token=replay_token,
     )
+    response = JointEvidenceResponse(**data.model_dump(), request_id=request.state.request_id)
     registry = getattr(request.app.state, "replay_metrics", None)
     if registry is not None:
         record_joint_evidence_api_request(registry, outcome="ready", error_code="none")
-    return JointEvidenceResponse(**data.model_dump(), request_id=request.state.request_id)
+    return response
 
 
 def _resolve_evidence_replay_token(
