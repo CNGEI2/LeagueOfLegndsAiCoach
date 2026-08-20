@@ -86,12 +86,17 @@ export function findReplayCapabilityForMatch(
   matchId: string,
   requiredStatus?: ReplayStatus,
 ): ReplayCapability | null {
-  let best: ReplayCapability | null = null;
+  const keys: string[] = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
-    if (!key?.startsWith(STORAGE_KEY_PREFIX)) continue;
-    const replayId = key.slice(STORAGE_KEY_PREFIX.length);
-    const capability = loadReplayCapability(replayId);
+    if (key?.startsWith(STORAGE_KEY_PREFIX)) {
+      keys.push(key);
+    }
+  }
+
+  let best: ReplayCapability | null = null;
+  for (const key of keys) {
+    const capability = loadReplayCapability(key.slice(STORAGE_KEY_PREFIX.length));
     if (!capability || capability.matchId !== matchId) continue;
     if (requiredStatus !== undefined && capability.status !== requiredStatus) continue;
     if (!best || Date.parse(capability.updatedAt) > Date.parse(best.updatedAt)) {

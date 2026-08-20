@@ -462,12 +462,24 @@ function validEvidenceResponse(overrides: Record<string, unknown> = {}) {
       },
     ],
     timeline_cache_status: "miss",
-    replay_link: null,
+    replay_link: {
+      status: "linked",
+      full_count: 1,
+      partial_count: 0,
+      unavailable_count: 0,
+    },
     static_data_status: { available: true, version: "16.15.1", code: null },
     truncated: false,
     total_window_count: 1,
     scope_notice_code: "EVIDENCE_ONLY_NO_COACHING",
     request_id: SAFE_EVIDENCE_REQUEST_ID,
+    ...overrides,
+  };
+}
+
+function evidenceWindow(overrides: Record<string, unknown> = {}) {
+  return {
+    ...(validEvidenceResponse().windows as Record<string, unknown>[])[0],
     ...overrides,
   };
 }
@@ -580,11 +592,219 @@ describe("joint evidence schemas and prepareMatchEvidence", () => {
   });
 
   it("rejects end_ms earlier than start_ms", () => {
-    const base = validEvidenceResponse();
-    const window = { ...(base.windows as Record<string, unknown>[])[0], start_ms: 80_000, end_ms: 60_000 };
+    const window = evidenceWindow({ start_ms: 80_000, end_ms: 60_000 });
     expect(jointEvidenceResponseSchema.safeParse(validEvidenceResponse({ windows: [window] })).success).toBe(
       false,
     );
+  });
+
+  it.each(["timestamp_ms", "start_ms", "end_ms", "total_window_count"] as const)(
+    "rejects a negative time or count field %s",
+    (field) => {
+      if (field === "timestamp_ms") {
+        expect(
+          jointEvidenceResponseSchema.safeParse(
+            validEvidenceResponse({ facts: [{ ...factForKind("champion_kill"), timestamp_ms: -1 }] }),
+          ).success,
+        ).toBe(false);
+        return;
+      }
+      if (field === "total_window_count") {
+        expect(jointEvidenceResponseSchema.safeParse(validEvidenceResponse({ total_window_count: -1 })).success).toBe(
+          false,
+        );
+        return;
+      }
+      expect(
+        jointEvidenceResponseSchema.safeParse(validEvidenceResponse({ windows: [evidenceWindow({ [field]: -1 })] }))
+          .success,
+      ).toBe(false);
+    },
+  );
+
+  it("rejects unpaired coverage interval fields", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [evidenceWindow({ covered_game_end_ms: null })],
+        }),
+      ).success,
+    ).toBe(false);
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [evidenceWindow({ video_start_ms: null })],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("requires legal covered and video intervals for full and partial coverage", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              coverage: "full",
+              covered_game_start_ms: null,
+              covered_game_end_ms: null,
+              video_start_ms: null,
+              video_end_ms: null,
+              artifacts: [],
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(false);
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              coverage: "partial",
+              covered_game_start_ms: 50_000,
+              covered_game_end_ms: 60_000,
+              video_start_ms: null,
+              video_end_ms: null,
+              artifacts: [],
+            }),
+          ],
+          replay_link: { status: "linked", full_count: 0, partial_count: 1, unavailable_count: 0 },
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("requires unavailable coverage to have null intervals and no artifacts", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              coverage: "unavailable",
+              covered_game_start_ms: 48_000,
+              covered_game_end_ms: 68_000,
+              video_start_ms: 49_000,
+              video_end_ms: 69_000,
+            }),
+          ],
+          replay_link: { status: "linked", full_count: 0, partial_count: 0, unavailable_count: 1 },
+        }),
+      ).success,
+    ).toBe(false);
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [evidenceWindow({ coverage: "unavailable", artifacts: evidenceWindow().artifacts })],
+          replay_link: { status: "linked", full_count: 0, partial_count: 0, unavailable_count: 1 },
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects a covered interval outside the evidence window", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [
+            evidenceWindow({
+              start_ms: 48_000,
+              end_ms: 68_000,
+              covered_game_start_ms: 40_000,
+              covered_game_end_ms: 68_000,
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects an inverted video interval", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          windows: [evidenceWindow({ video_start_ms: 80_000, video_end_ms: 49_000 })],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects an artifact whose times fall outside the authorized coverage interval", () => {
+    const window = evidenceWindow();
+    const artifact = { ...(window.artifacts as Record<string, unknown>[])[0], game_time_ms: 90_000 };
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({ windows: [{ ...window, artifacts: [artifact] }] }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects full or partial coverage and artifacts when replay_link is null", () => {
+    expect(jointEvidenceResponseSchema.safeParse(validEvidenceResponse({ replay_link: null })).success).toBe(
+      false,
+    );
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          replay_link: null,
+          windows: [
+            evidenceWindow({
+              coverage: "unavailable",
+              covered_game_start_ms: null,
+              covered_game_end_ms: null,
+              video_start_ms: null,
+              video_end_ms: null,
+              artifacts: evidenceWindow().artifacts,
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("requires linked summary counts to match window coverage", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          replay_link: { status: "linked", full_count: 0, partial_count: 1, unavailable_count: 0 },
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("requires truncated and total_window_count to agree with returned windows", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(validEvidenceResponse({ truncated: false, total_window_count: 2 }))
+        .success,
+    ).toBe(false);
+    expect(
+      jointEvidenceResponseSchema.safeParse(validEvidenceResponse({ truncated: true, total_window_count: 1 }))
+        .success,
+    ).toBe(false);
+    expect(
+      jointEvidenceResponseSchema.safeParse(validEvidenceResponse({ truncated: true, total_window_count: 65 }))
+        .success,
+    ).toBe(true);
+  });
+
+  it("accepts timeline-only evidence with unavailable windows and no artifacts", () => {
+    expect(
+      jointEvidenceResponseSchema.safeParse(
+        validEvidenceResponse({
+          replay_link: null,
+          windows: [
+            evidenceWindow({
+              coverage: "unavailable",
+              covered_game_start_ms: null,
+              covered_game_end_ms: null,
+              video_start_ms: null,
+              video_end_ms: null,
+              artifacts: [],
+            }),
+          ],
+        }),
+      ).success,
+    ).toBe(true);
   });
 
   it("rejects schema_version values other than 1", () => {

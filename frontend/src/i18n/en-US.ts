@@ -167,4 +167,7 @@ export const enUS = {
   matchEvidenceUnsupportedMode: "Timeline evidence is not supported for this match mode.",
   matchTimelineNotFound: "Timeline evidence was not found for this match.",
   replayEvidenceNotReady: "Replay evidence is not ready yet. Try again shortly.",
+  evidenceTruncatedNotice: "Showing {shown} of {total} candidate windows.",
+  evidenceNotFound: "Timeline evidence is not available.",
+  evidenceValidationError: "The evidence request could not be validated.",
 } as const;

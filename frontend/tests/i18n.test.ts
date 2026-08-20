@@ -106,6 +106,7 @@ describe("joint evidence bilingual keys", () => {
     "coverageUnavailable",
     "evidenceTimelineOnly",
     "evidenceLinkedFrames",
+    "evidenceTruncatedNotice",
     "retry",
     "matchEvidenceUnsupportedMode",
     "matchTimelineNotFound",
@@ -117,6 +118,8 @@ describe("joint evidence bilingual keys", () => {
     "riotRateLimited",
     "riotUnavailable",
     "riotRequestInvalid",
+    "evidenceNotFound",
+    "evidenceValidationError",
   ] as const;
 
   it("includes prepare, loading, empty, notice, facts, relationships, categories, coverage, linkage, retry, and J1 errors", () => {
@@ -143,6 +146,13 @@ describe("joint evidence bilingual keys", () => {
     expect(en.matchEvidenceUnsupportedMode.toLowerCase()).toMatch(/not supported|unsupported/);
     expect(en.matchTimelineNotFound.toLowerCase()).toMatch(/timeline/);
     expect(en.replayEvidenceNotReady.toLowerCase()).toMatch(/not ready|ready/);
+    expect(en.evidenceTruncatedNotice.toLowerCase()).toMatch(/\{shown\}.*\{total\}|\{total\}.*\{shown\}/);
+    expect(en.evidenceNotFound.toLowerCase()).toMatch(/not available|unavailable|not found/);
+    expect(en.evidenceValidationError.toLowerCase()).toMatch(/validat/);
+    expect(en.evidenceNotFound).not.toBe(en.invalidApiResponse);
+    expect(en.evidenceValidationError).not.toBe(en.invalidApiResponse);
+    expect(zh.evidenceNotFound).not.toBe(zh.invalidApiResponse);
+    expect(zh.evidenceValidationError).not.toBe(zh.invalidApiResponse);
   });
 
   it("keeps English and Chinese joint-evidence copy free of coaching conclusions", () => {

@@ -741,6 +741,7 @@ footer {
 .evidence-status,
 .evidence-empty,
 .evidence-link-notice,
+.evidence-truncated-notice,
 .evidence-window-interval,
 .evidence-window-triggers {
   margin: 0;

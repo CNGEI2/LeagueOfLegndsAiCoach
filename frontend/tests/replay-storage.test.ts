@@ -209,6 +209,48 @@ describe("replay capability storage", () => {
     });
   });
 
+  it("snapshots storage keys so a corrupt earlier item cannot hide a later ready capability", () => {
+    const corruptId = "aaaaaaaa-bbbb-4ccc-8ddd-aaaaaaaac001";
+    const expiredId = "aaaaaaaa-bbbb-4ccc-8ddd-aaaaaaaac002";
+    const readyId = "aaaaaaaa-bbbb-4ccc-8ddd-aaaaaaaac003";
+
+    memoryStorage.setItem(`lol-ai-coach:replay:${corruptId}`, "{not-json");
+    memoryStorage.setItem(
+      `lol-ai-coach:replay:${expiredId}`,
+      JSON.stringify({
+        replayId: expiredId,
+        accessToken: "expired-token",
+        matchId: "NA1_123",
+        updatedAt: "2026-07-20T15:00:00.000Z",
+        status: "ready",
+      }),
+    );
+    saveReplayCapability({
+      replayId: readyId,
+      accessToken: "surviving-ready-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
+    });
+
+    expect([...Array(memoryStorage.length)].map((_, index) => memoryStorage.key(index))).toEqual([
+      `lol-ai-coach:replay:${corruptId}`,
+      `lol-ai-coach:replay:${expiredId}`,
+      `lol-ai-coach:replay:${readyId}`,
+    ]);
+
+    expect(findReplayCapabilityForMatch("NA1_123", "ready")).toEqual({
+      replayId: readyId,
+      accessToken: "surviving-ready-token",
+      matchId: "NA1_123",
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
+    });
+    expect(memoryStorage.getItem(`lol-ai-coach:replay:${corruptId}`)).toBeNull();
+    expect(memoryStorage.getItem(`lol-ai-coach:replay:${expiredId}`)).toBeNull();
+    expect(memoryStorage.getItem(`lol-ai-coach:replay:${readyId}`)).not.toBeNull();
+  });
+
   it("returns null and removes corrupt JSON", () => {
     memoryStorage.setItem(STORAGE_KEY, "{not-json");
     expect(loadReplayCapability(REPLAY_ID)).toBeNull();

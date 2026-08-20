@@ -259,6 +259,41 @@ describe("EvidenceSection", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
+  it.each([
+    { locale: "zh-CN" as const },
+    { platform: "EUW1" as const },
+    { puuid: "other-puuid" },
+  ])("aborts in-flight work and resets to idle when %s changes", async (nextProps) => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    let firstSignal: AbortSignal | undefined;
+    prepareMatchEvidenceMock.mockImplementation((_input, signal?: AbortSignal) => {
+      firstSignal = signal;
+      return new Promise(() => undefined);
+    });
+
+    const view = renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    await waitFor(() => expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <EvidenceSection
+        matchId={MATCH_ID}
+        puuid={nextProps.puuid ?? PUUID}
+        platform={nextProps.platform ?? "NA1"}
+        locale={nextProps.locale ?? "en-US"}
+      />,
+    );
+
+    await waitFor(() => expect(firstSignal?.aborted).toBe(true));
+    expect(
+      screen.getByRole("button", {
+        name: getMessages(nextProps.locale ?? "en-US").prepareEvidence,
+      }),
+    ).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("renders Timeline-only ready facts, windows, and the evidence-only notice", async () => {
     const user = userEvent.setup();
     const messages = getMessages("en-US");
@@ -481,5 +516,329 @@ describe("EvidenceSection", () => {
       "type",
       "button",
     );
+  });
+
+  it("drops a stale capability and retries Timeline-only when the artifact manifest is REPLAY_NOT_FOUND", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    findReplayCapabilityForMatchMock.mockReturnValue({
+      replayId: REPLAY_ID,
+      accessToken: TOKEN,
+      matchId: MATCH_ID,
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
+    });
+    prepareMatchEvidenceMock
+      .mockResolvedValueOnce(linkedReady())
+      .mockResolvedValueOnce(timelineOnlyReady());
+    getReplayArtifactsMock.mockRejectedValue(
+      new ApiClientError("REPLAY_NOT_FOUND", {}, false, SAFE_REQUEST_ID),
+    );
+    renderSection();
+
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+
+    await waitFor(() => expect(removeReplayCapabilityMock).toHaveBeenCalledWith(REPLAY_ID));
+    await waitFor(() => expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(2));
+    expect(prepareMatchEvidenceMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        matchId: MATCH_ID,
+        puuid: PUUID,
+        platform: "NA1",
+        locale: "en-US",
+      }),
+    );
+    expect(prepareMatchEvidenceMock.mock.calls[1]?.[0]).not.toHaveProperty("replay");
+    expect(getReplayArtifactsMock).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(messages.evidenceTimelineOnly)).toBeVisible();
+    expect(screen.queryByText(messages.coverageFull)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.evidenceLinkedFrames)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("replay-artifact-gallery")).not.toBeInTheDocument();
+  });
+
+  it("aborts a deferred manifest refresh on unmount", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    findReplayCapabilityForMatchMock.mockReturnValue({
+      replayId: REPLAY_ID,
+      accessToken: TOKEN,
+      matchId: MATCH_ID,
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
+    });
+    prepareMatchEvidenceMock.mockResolvedValue(linkedReady());
+    let refreshSignal: AbortSignal | undefined;
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce((_input, signal?: AbortSignal) => {
+        refreshSignal = signal;
+        return new Promise(() => undefined);
+      });
+
+    const view = renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const image = await screen.findByRole("img");
+    image.dispatchEvent(new Event("error"));
+
+    await waitFor(() => expect(getReplayArtifactsMock).toHaveBeenCalledTimes(2));
+    view.unmount();
+    await waitFor(() => expect(refreshSignal?.aborted).toBe(true));
+  });
+
+  it("ignores a stale deferred refresh after the same request key is prepared again", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    findReplayCapabilityForMatchMock.mockReturnValue({
+      replayId: REPLAY_ID,
+      accessToken: TOKEN,
+      matchId: MATCH_ID,
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
+    });
+    const secondArtifactId = "dddddddd-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    prepareMatchEvidenceMock
+      .mockResolvedValueOnce(linkedReady())
+      .mockResolvedValueOnce(
+        timelineOnlyReady({
+          windows: [
+            {
+              window_id: "evidence-window:second",
+              start_ms: 48_000,
+              end_ms: 68_000,
+              categories: ["combat_context"],
+              trigger_fact_ids: ["timeline:NA1:NA1_123456789:v1:frame:1:event:0"],
+              coverage: "full",
+              covered_game_start_ms: 48_000,
+              covered_game_end_ms: 68_000,
+              video_start_ms: 49_000,
+              video_end_ms: 69_000,
+              artifacts: [
+                {
+                  artifact_id: secondArtifactId,
+                  kind: "verification_frame",
+                  game_time_ms: 60_000,
+                  video_time_ms: 61_000,
+                },
+              ],
+            },
+          ],
+          replay_link: {
+            status: "linked",
+            full_count: 1,
+            partial_count: 0,
+            unavailable_count: 0,
+          },
+        }),
+      );
+
+    let resolveStaleRefresh: ((value: ReturnType<typeof artifactsManifest>) => void) | undefined;
+    getReplayArtifactsMock
+      .mockResolvedValueOnce(artifactsManifest())
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveStaleRefresh = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        artifacts: [
+          {
+            artifact_id: secondArtifactId,
+            replay_id: REPLAY_ID,
+            kind: "verification_frame",
+            game_time_ms: 60_000,
+            video_time_ms: 61_000,
+            media_type: "image/jpeg",
+            width: 1280,
+            height: 720,
+            size_bytes: 2048,
+            access: {
+              mode: "presigned",
+              url: "https://cdn.example/artifacts/second.jpg",
+              expires_at: "2026-08-01T15:05:00+00:00",
+            },
+          },
+        ],
+        request_id: SAFE_REQUEST_ID,
+      });
+
+    const view = renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const firstImage = await screen.findByRole("img");
+    expect(firstImage).toHaveAttribute("src", "https://cdn.example/artifacts/matched.jpg");
+    firstImage.dispatchEvent(new Event("error"));
+    await waitFor(() => expect(resolveStaleRefresh).toBeDefined());
+
+    view.rerender(<EvidenceSection matchId="NA1_other" puuid={PUUID} platform="NA1" locale="en-US" />);
+    view.rerender(
+      <EvidenceSection matchId={MATCH_ID} puuid={PUUID} platform="NA1" locale="en-US" />,
+    );
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    expect(await screen.findByRole("img")).toHaveAttribute(
+      "src",
+      "https://cdn.example/artifacts/second.jpg",
+    );
+
+    resolveStaleRefresh?.(artifactsManifest());
+    await waitFor(() =>
+      expect(screen.getByRole("img")).toHaveAttribute("src", "https://cdn.example/artifacts/second.jpg"),
+    );
+    expect(document.querySelector('img[src="https://cdn.example/artifacts/matched.jpg"]')).toBeNull();
+  });
+
+  it("renders each linked artifact inside its own window card", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const secondArtifactId = "dddddddd-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    findReplayCapabilityForMatchMock.mockReturnValue({
+      replayId: REPLAY_ID,
+      accessToken: TOKEN,
+      matchId: MATCH_ID,
+      updatedAt: "2026-08-01T15:00:00.000Z",
+      status: "ready",
+    });
+    prepareMatchEvidenceMock.mockResolvedValue(
+      timelineOnlyReady({
+        windows: [
+          {
+            window_id: "evidence-window:one",
+            start_ms: 48_000,
+            end_ms: 68_000,
+            categories: ["combat_context"],
+            trigger_fact_ids: ["fact-one"],
+            coverage: "full",
+            covered_game_start_ms: 48_000,
+            covered_game_end_ms: 68_000,
+            video_start_ms: 49_000,
+            video_end_ms: 69_000,
+            artifacts: [
+              {
+                artifact_id: ARTIFACT_ID,
+                kind: "verification_frame",
+                game_time_ms: 60_000,
+                video_time_ms: 61_000,
+              },
+            ],
+          },
+          {
+            window_id: "evidence-window:two",
+            start_ms: 80_000,
+            end_ms: 100_000,
+            categories: ["objective_context"],
+            trigger_fact_ids: ["fact-two"],
+            coverage: "full",
+            covered_game_start_ms: 80_000,
+            covered_game_end_ms: 100_000,
+            video_start_ms: 81_000,
+            video_end_ms: 101_000,
+            artifacts: [
+              {
+                artifact_id: secondArtifactId,
+                kind: "verification_frame",
+                game_time_ms: 90_000,
+                video_time_ms: 91_000,
+              },
+              {
+                artifact_id: MISSING_ARTIFACT_ID,
+                kind: "verification_frame",
+                game_time_ms: 91_000,
+                video_time_ms: 92_000,
+              },
+            ],
+          },
+        ],
+        total_window_count: 2,
+        replay_link: { status: "linked", full_count: 2, partial_count: 0, unavailable_count: 0 },
+      }),
+    );
+    getReplayArtifactsMock.mockResolvedValue({
+      artifacts: [
+        ...artifactsManifest().artifacts,
+        {
+          artifact_id: secondArtifactId,
+          replay_id: REPLAY_ID,
+          kind: "verification_frame",
+          game_time_ms: 90_000,
+          video_time_ms: 91_000,
+          media_type: "image/jpeg",
+          width: 1280,
+          height: 720,
+          size_bytes: 2048,
+          access: {
+            mode: "presigned",
+            url: "https://cdn.example/artifacts/second.jpg",
+            expires_at: "2026-08-01T15:05:00+00:00",
+          },
+        },
+      ],
+      request_id: SAFE_REQUEST_ID,
+    });
+    renderSection();
+
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+
+    const firstCard = await screen.findByTestId("evidence-window:one");
+    const secondCard = screen.getByTestId("evidence-window:two");
+    const firstGallery = within(firstCard).getByTestId("replay-artifact-gallery");
+    const secondGallery = within(secondCard).getByTestId("replay-artifact-gallery");
+    expect(within(firstGallery).getAllByRole("img")).toHaveLength(1);
+    expect(within(firstGallery).getByRole("img")).toHaveAttribute(
+      "src",
+      "https://cdn.example/artifacts/matched.jpg",
+    );
+    expect(within(secondGallery).getAllByRole("img")).toHaveLength(1);
+    expect(within(secondGallery).getByRole("img")).toHaveAttribute(
+      "src",
+      "https://cdn.example/artifacts/second.jpg",
+    );
+    expect(within(firstCard).queryByRole("img", { name: /01:30/ })).not.toBeInTheDocument();
+    expect(within(secondCard).queryByRole("img", { name: /01:00/ })).not.toBeInTheDocument();
+    expect(document.querySelector('img[src="https://cdn.example/artifacts/extra.jpg"]')).toBeNull();
+    for (const img of document.querySelectorAll("img")) {
+      expect(img.getAttribute("src") ?? "").not.toContain(MISSING_ARTIFACT_ID);
+    }
+  });
+
+  it("shows truncation metadata only when the response is truncated", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    prepareMatchEvidenceMock.mockResolvedValueOnce(
+      timelineOnlyReady({ truncated: true, total_window_count: 65 }),
+    );
+    renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    expect(
+      await screen.findByText(messages.evidenceTruncatedNotice.replace("{shown}", "1").replace("{total}", "65")),
+    ).toBeVisible();
+
+    cleanup();
+    prepareMatchEvidenceMock.mockResolvedValueOnce(timelineOnlyReady({ truncated: false, total_window_count: 1 }));
+    renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    expect(await screen.findByText(messages.evidenceTimelineOnly)).toBeVisible();
+    expect(screen.queryByText(/65/)).not.toBeInTheDocument();
+  });
+
+  it("maps NOT_FOUND and VALIDATION_ERROR to dedicated copy instead of invalid response", async () => {
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    prepareMatchEvidenceMock.mockRejectedValueOnce(
+      new ApiClientError("NOT_FOUND", {}, false, SAFE_REQUEST_ID),
+    );
+    renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const notFoundAlert = await screen.findByRole("alert");
+    expect(notFoundAlert).toHaveTextContent(messages.evidenceNotFound);
+    expect(notFoundAlert).not.toHaveTextContent(messages.invalidApiResponse);
+
+    cleanup();
+    prepareMatchEvidenceMock.mockRejectedValueOnce(
+      new ApiClientError("VALIDATION_ERROR", {}, false, SAFE_REQUEST_ID),
+    );
+    renderSection();
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const validationAlert = await screen.findByRole("alert");
+    expect(validationAlert).toHaveTextContent(messages.evidenceValidationError);
+    expect(validationAlert).not.toHaveTextContent(messages.invalidApiResponse);
   });
 });

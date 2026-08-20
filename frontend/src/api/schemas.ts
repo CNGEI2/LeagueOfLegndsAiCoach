@@ -280,9 +280,11 @@ export const evidenceRelationshipSchema = z.enum([
   "not_involved",
 ]);
 
+const nonNegativeIntSchema = z.number().int().nonnegative();
+
 const evidenceFactBaseSchema = {
   fact_id: z.string(),
-  timestamp_ms: z.number().int(),
+  timestamp_ms: nonNegativeIntSchema,
   relationship: evidenceRelationshipSchema,
 };
 
@@ -412,45 +414,102 @@ export const evidenceArtifactReferenceSchema = z
   .object({
     artifact_id: z.string().uuid(),
     kind: replayArtifactKindSchema,
-    game_time_ms: z.number().int(),
-    video_time_ms: z.number().int(),
+    game_time_ms: nonNegativeIntSchema,
+    video_time_ms: nonNegativeIntSchema,
   })
   .strict();
+
+function isNullablePair(start: number | null, end: number | null): boolean {
+  return (start === null) === (end === null);
+}
 
 export const evidenceWindowSchema = z
   .object({
     window_id: z.string(),
-    start_ms: z.number().int(),
-    end_ms: z.number().int(),
+    start_ms: nonNegativeIntSchema,
+    end_ms: nonNegativeIntSchema,
     categories: z.array(evidenceCategorySchema),
     trigger_fact_ids: z.array(z.string()),
     coverage: evidenceCoverageSchema,
-    covered_game_start_ms: z.number().int().nullable(),
-    covered_game_end_ms: z.number().int().nullable(),
-    video_start_ms: z.number().int().nullable(),
-    video_end_ms: z.number().int().nullable(),
+    covered_game_start_ms: nonNegativeIntSchema.nullable(),
+    covered_game_end_ms: nonNegativeIntSchema.nullable(),
+    video_start_ms: nonNegativeIntSchema.nullable(),
+    video_end_ms: nonNegativeIntSchema.nullable(),
     artifacts: z.array(evidenceArtifactReferenceSchema),
   })
   .strict()
-  .refine((window) => window.end_ms >= window.start_ms, {
-    message: "end_ms must be >= start_ms",
-  })
-  .refine(
-    (window) => {
-      if (window.covered_game_start_ms !== null && window.covered_game_end_ms !== null) {
-        return window.covered_game_end_ms >= window.covered_game_start_ms;
+  .superRefine((window, context) => {
+    if (window.end_ms < window.start_ms) {
+      context.addIssue({ code: "custom", message: "end_ms must be >= start_ms" });
+    }
+    if (!isNullablePair(window.covered_game_start_ms, window.covered_game_end_ms)) {
+      context.addIssue({ code: "custom", message: "covered game interval fields must be paired" });
+    }
+    if (!isNullablePair(window.video_start_ms, window.video_end_ms)) {
+      context.addIssue({ code: "custom", message: "video interval fields must be paired" });
+    }
+
+    const coveredStart = window.covered_game_start_ms;
+    const coveredEnd = window.covered_game_end_ms;
+    const videoStart = window.video_start_ms;
+    const videoEnd = window.video_end_ms;
+    const hasCovered = coveredStart !== null && coveredEnd !== null;
+    const hasVideo = videoStart !== null && videoEnd !== null;
+
+    if (window.coverage === "unavailable") {
+      if (hasCovered || hasVideo || window.artifacts.length > 0) {
+        context.addIssue({
+          code: "custom",
+          message: "unavailable coverage must have null intervals and no artifacts",
+        });
       }
-      return true;
-    },
-    { message: "covered_game_end_ms must be >= covered_game_start_ms" },
-  );
+      return;
+    }
+
+    if (!hasCovered || !hasVideo) {
+      context.addIssue({
+        code: "custom",
+        message: "full and partial coverage require covered and video intervals",
+      });
+      return;
+    }
+    if (coveredEnd < coveredStart) {
+      context.addIssue({
+        code: "custom",
+        message: "covered_game_end_ms must be >= covered_game_start_ms",
+      });
+    }
+    if (videoEnd < videoStart) {
+      context.addIssue({ code: "custom", message: "video_end_ms must be >= video_start_ms" });
+    }
+    if (coveredStart < window.start_ms || coveredEnd > window.end_ms) {
+      context.addIssue({
+        code: "custom",
+        message: "covered interval must lie inside the evidence window",
+      });
+    }
+    for (const artifact of window.artifacts) {
+      if (artifact.game_time_ms < coveredStart || artifact.game_time_ms > coveredEnd) {
+        context.addIssue({
+          code: "custom",
+          message: "artifact game time must lie inside the authorized coverage interval",
+        });
+      }
+      if (artifact.video_time_ms < videoStart || artifact.video_time_ms > videoEnd) {
+        context.addIssue({
+          code: "custom",
+          message: "artifact video time must lie inside the authorized coverage interval",
+        });
+      }
+    }
+  });
 
 export const replayLinkSummarySchema = z
   .object({
     status: z.literal("linked"),
-    full_count: z.number().int(),
-    partial_count: z.number().int(),
-    unavailable_count: z.number().int(),
+    full_count: nonNegativeIntSchema,
+    partial_count: nonNegativeIntSchema,
+    unavailable_count: nonNegativeIntSchema,
   })
   .strict();
 
@@ -467,11 +526,53 @@ export const jointEvidenceResponseSchema = z
     replay_link: replayLinkSummarySchema.nullable(),
     static_data_status: staticDataStatusSchema,
     truncated: z.boolean(),
-    total_window_count: z.number().int(),
+    total_window_count: nonNegativeIntSchema,
     scope_notice_code: z.literal("EVIDENCE_ONLY_NO_COACHING"),
     request_id: requestIdSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((response, context) => {
+    if (response.replay_link === null) {
+      for (const window of response.windows) {
+        if (window.coverage !== "unavailable" || window.artifacts.length > 0) {
+          context.addIssue({
+            code: "custom",
+            message: "timeline-only evidence cannot include replay coverage or artifacts",
+          });
+          break;
+        }
+      }
+    } else {
+      const fullCount = response.windows.filter((window) => window.coverage === "full").length;
+      const partialCount = response.windows.filter((window) => window.coverage === "partial").length;
+      const unavailableCount = response.windows.filter((window) => window.coverage === "unavailable")
+        .length;
+      if (
+        response.replay_link.full_count !== fullCount ||
+        response.replay_link.partial_count !== partialCount ||
+        response.replay_link.unavailable_count !== unavailableCount
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "linked summary counts must match window coverage",
+        });
+      }
+    }
+
+    if (response.truncated) {
+      if (response.total_window_count <= response.windows.length) {
+        context.addIssue({
+          code: "custom",
+          message: "truncated evidence must report a total greater than returned windows",
+        });
+      }
+    } else if (response.total_window_count !== response.windows.length) {
+      context.addIssue({
+        code: "custom",
+        message: "untruncated total_window_count must equal returned windows",
+      });
+    }
+  });
 
 export type PlayerProfile = z.infer<typeof playerProfileSchema>;
 export type HydratedParticipant = z.infer<typeof hydratedParticipantSchema>;

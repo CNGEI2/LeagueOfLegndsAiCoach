@@ -6,6 +6,7 @@ import {
   ApiClientError,
   getReplayArtifacts,
   prepareMatchEvidence,
+  type PrepareMatchEvidenceInput,
 } from "@/api/client";
 import type {
   JointEvidenceResponse,
@@ -115,6 +116,10 @@ function messageForEvidenceError(
       return messages.matchNotFound;
     case "PLAYER_NOT_IN_MATCH":
       return messages.playerNotInMatch;
+    case "NOT_FOUND":
+      return messages.evidenceNotFound;
+    case "VALIDATION_ERROR":
+      return messages.evidenceValidationError;
     case "RIOT_AUTH_FAILED":
       return messages.riotAuthFailed;
     case "RIOT_RATE_LIMITED": {
@@ -138,6 +143,23 @@ function messageForEvidenceError(
   }
 }
 
+function timelineOnlyInput(
+  matchId: string,
+  puuid: string,
+  platform: Platform,
+  locale: Locale,
+): PrepareMatchEvidenceInput {
+  return { matchId, puuid, platform, locale };
+}
+
+function artifactsForWindow(
+  window: JointEvidenceResponse["windows"][number],
+  linkedArtifacts: ReplayArtifact[],
+): ReplayArtifact[] {
+  const referencedIds = new Set(window.artifacts.map((artifact) => artifact.artifact_id));
+  return linkedArtifacts.filter((artifact) => referencedIds.has(artifact.artifact_id));
+}
+
 type EvidenceState =
   | { status: "idle" }
   | { status: "loading" }
@@ -147,6 +169,7 @@ type EvidenceState =
       linkedArtifacts: ReplayArtifact[];
       accessToken: string | null;
       replayId: string | null;
+      requestKey: number;
     }
   | {
       status: "error";
@@ -168,12 +191,21 @@ export function EvidenceSection({
 }) {
   const messages = getMessages(locale);
   const [state, setState] = useState<EvidenceState>({ status: "idle" });
-  const abortRef = useRef<AbortController | null>(null);
+  const prepareAbortRef = useRef<AbortController | null>(null);
+  const refreshAbortRef = useRef<AbortController | null>(null);
+  const requestKeyRef = useRef(0);
   const propsKey = `${matchId}:${platform}:${puuid}:${locale}`;
 
+  function abortAllWork() {
+    prepareAbortRef.current?.abort();
+    prepareAbortRef.current = null;
+    refreshAbortRef.current?.abort();
+    refreshAbortRef.current = null;
+  }
+
   useEffect(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+    abortAllWork();
+    requestKeyRef.current += 1;
     // Reset to idle when the match/locale/platform/puuid identity changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional prop-driven reset
     setState({ status: "idle" });
@@ -181,92 +213,112 @@ export function EvidenceSection({
 
   useEffect(() => {
     return () => {
-      abortRef.current?.abort();
+      abortAllWork();
     };
   }, []);
 
-  async function prepareWithOptionalReplay(
+  async function prepareEvidence(
     capability: ReplayCapability | null,
     signal: AbortSignal,
-    allowStaleReplayRetry: boolean,
   ): Promise<JointEvidenceResponse> {
-    const input = {
-      matchId,
-      puuid,
-      platform,
-      locale,
-      ...(capability
-        ? { replay: { replayId: capability.replayId, accessToken: capability.accessToken } }
-        : {}),
-    };
-
-    try {
-      return await prepareMatchEvidence(input, signal);
-    } catch (error) {
-      if (
-        allowStaleReplayRetry &&
-        capability &&
-        error instanceof ApiClientError &&
-        error.code === "REPLAY_NOT_FOUND"
-      ) {
-        removeReplayCapability(capability.replayId);
-        return prepareMatchEvidence(
-          {
-            matchId,
-            puuid,
-            platform,
-            locale,
-          },
-          signal,
-        );
-      }
-      throw error;
-    }
+    return prepareMatchEvidence(
+      capability
+        ? {
+            ...timelineOnlyInput(matchId, puuid, platform, locale),
+            replay: { replayId: capability.replayId, accessToken: capability.accessToken },
+          }
+        : timelineOnlyInput(matchId, puuid, platform, locale),
+      signal,
+    );
   }
 
   async function runPrepare() {
-    abortRef.current?.abort();
+    abortAllWork();
+    const requestKey = requestKeyRef.current + 1;
+    requestKeyRef.current = requestKey;
     const controller = new AbortController();
-    abortRef.current = controller;
+    prepareAbortRef.current = controller;
     setState({ status: "loading" });
 
     const capability = findReplayCapabilityForMatch(matchId, "ready");
+    let activeCapability = capability;
+    let replayFallbackUsed = false;
 
     try {
-      const evidence = await prepareWithOptionalReplay(capability, controller.signal, true);
-      if (controller.signal.aborted) return;
+      let evidence: JointEvidenceResponse;
+      try {
+        evidence = await prepareEvidence(activeCapability, controller.signal);
+      } catch (error) {
+        if (
+          activeCapability &&
+          !replayFallbackUsed &&
+          error instanceof ApiClientError &&
+          error.code === "REPLAY_NOT_FOUND"
+        ) {
+          removeReplayCapability(activeCapability.replayId);
+          replayFallbackUsed = true;
+          activeCapability = null;
+          evidence = await prepareEvidence(null, controller.signal);
+        } else {
+          throw error;
+        }
+      }
+      if (controller.signal.aborted || requestKey !== requestKeyRef.current) return;
 
       let linkedArtifacts: ReplayArtifact[] = [];
       let accessToken: string | null = null;
       let replayId: string | null = null;
 
-      if (evidence.replay_link && capability) {
-        accessToken = capability.accessToken;
-        replayId = capability.replayId;
-        const manifest = await getReplayArtifacts(
-          { replayId: capability.replayId, accessToken: capability.accessToken },
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        const referencedIds = new Set(
-          evidence.windows.flatMap((window) =>
-            window.artifacts.map((artifact) => artifact.artifact_id),
-          ),
-        );
-        linkedArtifacts = manifest.artifacts.filter((artifact) =>
-          referencedIds.has(artifact.artifact_id),
-        );
+      if (evidence.replay_link && activeCapability) {
+        try {
+          const manifest = await getReplayArtifacts(
+            { replayId: activeCapability.replayId, accessToken: activeCapability.accessToken },
+            controller.signal,
+          );
+          if (controller.signal.aborted || requestKey !== requestKeyRef.current) return;
+          const referencedIds = new Set(
+            evidence.windows.flatMap((window) =>
+              window.artifacts.map((artifact) => artifact.artifact_id),
+            ),
+          );
+          linkedArtifacts = manifest.artifacts.filter((artifact) =>
+            referencedIds.has(artifact.artifact_id),
+          );
+          accessToken = activeCapability.accessToken;
+          replayId = activeCapability.replayId;
+        } catch (error) {
+          if (controller.signal.aborted || requestKey !== requestKeyRef.current) return;
+          if (
+            activeCapability &&
+            !replayFallbackUsed &&
+            error instanceof ApiClientError &&
+            error.code === "REPLAY_NOT_FOUND"
+          ) {
+            removeReplayCapability(activeCapability.replayId);
+            replayFallbackUsed = true;
+            activeCapability = null;
+            evidence = await prepareEvidence(null, controller.signal);
+            if (controller.signal.aborted || requestKey !== requestKeyRef.current) return;
+            linkedArtifacts = [];
+            accessToken = null;
+            replayId = null;
+          } else {
+            throw error;
+          }
+        }
       }
 
+      if (controller.signal.aborted || requestKey !== requestKeyRef.current) return;
       setState({
         status: "ready",
         evidence,
         linkedArtifacts,
         accessToken,
         replayId,
+        requestKey,
       });
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || requestKey !== requestKeyRef.current) return;
       if (error instanceof DOMException && error.name === "AbortError") return;
       if (error instanceof ApiClientError) {
         setState({
@@ -288,18 +340,22 @@ export function EvidenceSection({
 
   function refreshLinkedArtifacts() {
     if (state.status !== "ready" || !state.accessToken || !state.replayId) return;
-    const { accessToken, replayId, evidence } = state;
+    const { accessToken, replayId, evidence, requestKey } = state;
+    refreshAbortRef.current?.abort();
     const controller = new AbortController();
+    refreshAbortRef.current = controller;
     void getReplayArtifacts({ replayId, accessToken }, controller.signal)
       .then((manifest) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || requestKey !== requestKeyRef.current) return;
         const referencedIds = new Set(
           evidence.windows.flatMap((window) =>
             window.artifacts.map((artifact) => artifact.artifact_id),
           ),
         );
         setState((previous) => {
-          if (previous.status !== "ready") return previous;
+          if (previous.status !== "ready" || previous.requestKey !== requestKey) {
+            return previous;
+          }
           return {
             ...previous,
             linkedArtifacts: manifest.artifacts.filter((artifact) =>
@@ -377,6 +433,14 @@ function EvidenceReadyView({
       <p className="evidence-link-notice">
         {linked ? messages.evidenceLinkedFrames : messages.evidenceTimelineOnly}
       </p>
+      {evidence.truncated ? (
+        <p className="evidence-truncated-notice">
+          {fill(messages.evidenceTruncatedNotice, {
+            shown: String(evidence.windows.length),
+            total: String(evidence.total_window_count),
+          })}
+        </p>
+      ) : null}
 
       {isEmpty ? <p className="evidence-empty">{messages.evidenceEmpty}</p> : null}
 
@@ -396,41 +460,47 @@ function EvidenceReadyView({
 
       {!isEmpty && evidence.windows.length > 0 ? (
         <ul className="evidence-window-list">
-          {evidence.windows.map((window) => (
-            <li key={window.window_id} className="evidence-window">
-              <div className="evidence-window-meta">
-                <p className="evidence-window-interval">
-                  {fill(messages.evidenceGameInterval, {
-                    start: formatGameTime(window.start_ms),
-                    end: formatGameTime(window.end_ms),
-                  })}
-                </p>
-                <p className="evidence-window-coverage">{coverageLabel(window.coverage, messages)}</p>
-                <p className="evidence-window-triggers">
-                  {fill(messages.evidenceTriggerCount, {
-                    count: String(window.trigger_fact_ids.length),
-                  })}
-                </p>
-              </div>
-              <ul className="evidence-window-categories">
-                {window.categories.map((category) => (
-                  <li key={`${window.window_id}:${category}`}>
-                    {categoryLabel(category, messages)}
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
+          {evidence.windows.map((window) => {
+            const windowArtifacts = artifactsForWindow(window, linkedArtifacts);
+            return (
+              <li
+                key={window.window_id}
+                className="evidence-window"
+                data-testid={window.window_id}
+              >
+                <div className="evidence-window-meta">
+                  <p className="evidence-window-interval">
+                    {fill(messages.evidenceGameInterval, {
+                      start: formatGameTime(window.start_ms),
+                      end: formatGameTime(window.end_ms),
+                    })}
+                  </p>
+                  <p className="evidence-window-coverage">{coverageLabel(window.coverage, messages)}</p>
+                  <p className="evidence-window-triggers">
+                    {fill(messages.evidenceTriggerCount, {
+                      count: String(window.trigger_fact_ids.length),
+                    })}
+                  </p>
+                </div>
+                <ul className="evidence-window-categories">
+                  {window.categories.map((category) => (
+                    <li key={`${window.window_id}:${category}`}>
+                      {categoryLabel(category, messages)}
+                    </li>
+                  ))}
+                </ul>
+                {linked && accessToken && windowArtifacts.length > 0 ? (
+                  <ReplayArtifactGallery
+                    artifacts={windowArtifacts}
+                    accessToken={accessToken}
+                    messages={messages}
+                    onRefreshManifest={onRefreshManifest}
+                  />
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
-      ) : null}
-
-      {linked && accessToken && linkedArtifacts.length > 0 ? (
-        <ReplayArtifactGallery
-          artifacts={linkedArtifacts}
-          accessToken={accessToken}
-          messages={messages}
-          onRefreshManifest={onRefreshManifest}
-        />
       ) : null}
     </div>
   );

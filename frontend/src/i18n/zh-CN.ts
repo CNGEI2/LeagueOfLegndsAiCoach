@@ -163,4 +163,7 @@ export const zhCN: Messages = {
   matchEvidenceUnsupportedMode: "该对局模式不支持时间线证据。",
   matchTimelineNotFound: "未找到该对局的时间线证据。",
   replayEvidenceNotReady: "回放证据尚未就绪，请稍后再试。",
+  evidenceTruncatedNotice: "当前展示 {shown} / {total} 个候选时间段。",
+  evidenceNotFound: "时间线证据不可用。",
+  evidenceValidationError: "证据请求未通过校验。",
 };
