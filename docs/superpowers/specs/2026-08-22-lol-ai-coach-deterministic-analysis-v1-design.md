@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-22
 
-**Status:** Draft — pending written-spec review
+**Status:** Approved for implementation planning
 
 **Depends on:** Phase 2 Riot integration, Riot platform detection, Replay R1, Joint Evidence J1
 
