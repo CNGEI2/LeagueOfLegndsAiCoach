@@ -30,15 +30,17 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/pyproject.toml
-      - run: python -m pip install -e 'backend[dev]'
-      - run: pytest -m "not integration" -v
+      - run: python3 -m venv backend/.venv
+      - run: backend/.venv/bin/python -m pip install --upgrade pip
+      - run: backend/.venv/bin/python -m pip install -e 'backend[dev]'
+      - run: .venv/bin/pytest -m "not integration" -v
         working-directory: backend
       - run: make verify-postgres
-      - run: ruff check .
+      - run: .venv/bin/ruff check .
         working-directory: backend
-      - run: ruff format --check .
+      - run: .venv/bin/ruff format --check .
         working-directory: backend
-      - run: mypy
+      - run: .venv/bin/mypy
         working-directory: backend
       # Live smoke needs an ignored local Riot key and smoke identity; it is intentionally excluded.
 
