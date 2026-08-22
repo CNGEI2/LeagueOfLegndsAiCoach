@@ -163,6 +163,21 @@ def test_riot_max_concurrency_is_bounded_as_shared_probe_limit() -> None:
     assert settings.riot_max_concurrency == 16
 
 
+def test_analysis_defaults_dark() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.deterministic_analysis_enabled is False
+    assert settings.analysis_retention_days == 30
+
+
+def test_analysis_requires_joint_evidence() -> None:
+    with pytest.raises(ValueError, match="JOINT_EVIDENCE_ENABLED"):
+        Settings(
+            _env_file=None,
+            deterministic_analysis_enabled=True,
+            joint_evidence_enabled=False,
+        )
+
+
 def test_joint_evidence_settings_have_safe_defaults() -> None:
     settings = Settings(_env_file=None)
 

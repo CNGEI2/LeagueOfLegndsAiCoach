@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     riot_platform_confirmation_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     riot_account_primary_region: Region = Region.AMERICAS
     joint_evidence_enabled: bool = False
+    deterministic_analysis_enabled: bool = False
+    analysis_retention_days: int = Field(default=30, ge=1, le=365)
     timeline_cache_ttl_seconds: int = Field(default=2_592_000, ge=3_600, le=7_776_000)
     timeline_not_found_ttl_seconds: int = Field(default=300, ge=30, le=3_600)
     player_cache_ttl_seconds: int = 900
@@ -87,7 +89,11 @@ class Settings(BaseSettings):
         return bool(self.riot_api_key.get_secret_value())
 
     @model_validator(mode="after")
-    def validate_replay_settings(self) -> Self:
+    def validate_feature_settings(self) -> Self:
+        if self.deterministic_analysis_enabled and not self.joint_evidence_enabled:
+            raise ValueError(
+                "DETERMINISTIC_ANALYSIS_ENABLED requires JOINT_EVIDENCE_ENABLED=true"
+            )
         if not self.replay_enabled:
             return self
 
