@@ -2,12 +2,32 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, get_args
 from uuid import UUID
 
 from app.core.errors import ApiError, match_analysis_unsupported_mode, not_found
+from app.core.metrics import (
+    ANALYSIS_API_OUTCOMES,
+    ANALYSIS_CACHE_STATUSES,
+    ANALYSIS_COVERAGE_BUCKETS,
+    ANALYSIS_IDEMPOTENCY_RESULTS,
+    ANALYSIS_RESULT_STATUSES,
+    ANALYSIS_STAGES,
+    ANALYSIS_UNAVAILABLE_REASONS,
+    MetricsRegistry,
+    analysis_coverage_bucket,
+    record_analysis_cache,
+    record_analysis_coverage,
+    record_analysis_duration,
+    record_analysis_finding_count,
+    record_analysis_goal_count,
+    record_analysis_idempotency,
+    record_analysis_result,
+    record_analysis_unavailable,
+)
 from app.core.routing import Platform
 from app.repositories.analyses import AnalysisRepository
 from app.schemas.domain import MatchSnapshot
@@ -149,6 +169,14 @@ def validate_reference_closure(
 
 
 class AnalysisService:
+    API_OUTCOMES = ANALYSIS_API_OUTCOMES
+    CACHE_STATUSES = ANALYSIS_CACHE_STATUSES
+    RESULT_STATUSES = ANALYSIS_RESULT_STATUSES
+    COVERAGE_BUCKETS = ANALYSIS_COVERAGE_BUCKETS
+    STAGES = ANALYSIS_STAGES
+    IDEMPOTENCY_RESULTS = ANALYSIS_IDEMPOTENCY_RESULTS
+    UNAVAILABLE_REASONS = ANALYSIS_UNAVAILABLE_REASONS
+
     def __init__(
         self,
         *,
@@ -160,6 +188,8 @@ class AnalysisService:
         rule_engine: RuleEngine,
         retention_days: int,
         clock: Callable[[], datetime] | None = None,
+        metrics: MetricsRegistry | None = None,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._match_service = match_service
         self._timeline_service = timeline_service
@@ -169,10 +199,13 @@ class AnalysisService:
         self._rule_engine = rule_engine
         self._retention_days = retention_days
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._metrics = metrics
+        self._monotonic = monotonic or time.monotonic
 
     async def create_or_reuse(
         self, *, platform: Platform, match_id: str, puuid: str
     ) -> tuple[UUID, DeterministicAnalysisResult, bool]:
+        started = self._monotonic()
         match = await self._load_match(platform=platform, match_id=match_id, puuid=puuid)
         timeline, timeline_unavailable = await self._load_timeline(
             platform=platform, match_id=match_id
@@ -185,17 +218,17 @@ class AnalysisService:
             match=match, timeline=timeline, selected_puuid=puuid
         )
         scores = self._score_engine.compute(role=role, metrics=metrics)
-        findings, goals = self._rule_engine.evaluate(role=role, metrics=metrics, scores=scores)
+        findings, goals = self._rule_engine.evaluate(
+            role=role, metrics=metrics, scores=scores
+        )
+        unavailable_reasons = _collect_unavailable_reasons(
+            metrics=metrics, role=role, timeline_unavailable=timeline_unavailable
+        )
         input_hash = hashlib.sha256(
             canonical_analysis_input(match=match, timeline=timeline, selected_puuid=puuid)
         ).hexdigest()
-        unavailable_reasons = _collect_unavailable_reasons(
-            metrics=metrics,
-            role=role,
-            timeline_unavailable=timeline_unavailable,
-        )
         match_metric_gap = any(
-            metric.status == "unavailable" and metric.metric_key in _MATCH_METRIC_KEYS
+            metric.metric_key in _MATCH_METRIC_KEYS and metric.status == "unavailable"
             for metric in metrics
         )
         status = (
@@ -221,6 +254,7 @@ class AnalysisService:
             schema_version=RESULT_SCHEMA_VERSION,
         )
         validate_reference_closure(result, timeline=timeline)
+        after_compute = self._monotonic()
         now = self._clock()
         stored, created = await self._repository.create_or_reuse(
             idempotency_key=analysis_idempotency_key(
@@ -237,13 +271,48 @@ class AnalysisService:
             expires_at=now + timedelta(days=self._retention_days),
         )
         await self._repository.delete_expired(now=now)
+        after_persist = self._monotonic()
+        self._record_create_metrics(
+            result=stored.result,
+            created=created,
+            compute_seconds=after_compute - started,
+            persist_seconds=after_persist - after_compute,
+            total_seconds=after_persist - started,
+        )
         return stored.analysis_id, stored.result, created
 
     async def get(self, *, analysis_id: UUID) -> DeterministicAnalysisResult:
         stored = await self._repository.get(analysis_id=analysis_id, now=self._clock())
         if stored is None:
             raise not_found()
+        if self._metrics is not None:
+            record_analysis_cache(self._metrics, status="hit")
         return stored.result
+
+    def _record_create_metrics(
+        self,
+        *,
+        result: DeterministicAnalysisResult,
+        created: bool,
+        compute_seconds: float,
+        persist_seconds: float,
+        total_seconds: float,
+    ) -> None:
+        if self._metrics is None:
+            return
+        record_analysis_duration(self._metrics, stage="compute", seconds=compute_seconds)
+        record_analysis_duration(self._metrics, stage="persist", seconds=persist_seconds)
+        record_analysis_duration(self._metrics, stage="total", seconds=total_seconds)
+        record_analysis_cache(self._metrics, status="miss" if created else "hit")
+        record_analysis_idempotency(self._metrics, result="created" if created else "reused")
+        record_analysis_result(self._metrics, status=result.status)
+        record_analysis_coverage(
+            self._metrics, bucket=analysis_coverage_bucket(result.scores.coverage)
+        )
+        for reason in result.unavailable_reasons:
+            record_analysis_unavailable(self._metrics, reason=reason)
+        record_analysis_finding_count(self._metrics, count=len(result.findings))
+        record_analysis_goal_count(self._metrics, count=len(result.goals))
 
     async def _load_match(
         self, *, platform: Platform, match_id: str, puuid: str

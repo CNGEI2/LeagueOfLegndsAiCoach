@@ -14,6 +14,7 @@ a shared multiprocess backend; that wiring is out of scope here.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections.abc import Iterable
 
@@ -103,6 +104,125 @@ def record_joint_evidence_api_request(
     else:
         safe_code = "NOT_FOUND"
     registry.joint_evidence_api_requests_total.inc(outcome=safe_outcome, error_code=safe_code)
+
+
+ANALYSIS_API_OUTCOMES = frozenset({"ready", "error"})
+ANALYSIS_API_ERROR_CODES = frozenset(
+    {
+        "none",
+        "NOT_FOUND",
+        "VALIDATION_ERROR",
+        "MATCH_ANALYSIS_UNSUPPORTED_MODE",
+        "PLAYER_NOT_IN_MATCH",
+        "MATCH_NOT_FOUND",
+        "RIOT_AUTH_FAILED",
+        "RIOT_RATE_LIMITED",
+        "RIOT_INVALID_RESPONSE",
+        "RIOT_UNAVAILABLE",
+        "INTERNAL_SERVER_ERROR",
+        "HTTP_ERROR",
+    }
+)
+ANALYSIS_CACHE_STATUSES = frozenset({"hit", "miss"})
+ANALYSIS_RESULT_STATUSES = frozenset({"completed", "partial"})
+ANALYSIS_COVERAGE_BUCKETS = frozenset({"lt_60", "60_79", "80_99", "100"})
+ANALYSIS_STAGES = frozenset({"compute", "persist", "total"})
+ANALYSIS_IDEMPOTENCY_RESULTS = frozenset({"created", "reused"})
+ANALYSIS_UNAVAILABLE_REASONS = frozenset(
+    {
+        "missing_match_value",
+        "invalid_duration",
+        "division_by_zero",
+        "timeline_unavailable",
+        "role_unavailable",
+        "opponent_unavailable",
+        "opponent_ambiguous",
+        "insufficient_team_values",
+    }
+)
+
+
+def hashed_analysis_puuid(puuid: str) -> str:
+    return hashlib.sha256(puuid.encode("utf-8")).hexdigest()[:12]
+
+
+def is_analysis_request(*, method: str, path: str) -> bool:
+    if method not in {"GET", "POST"}:
+        return False
+    parts = path.strip("/").split("/")
+    if parts == ["api", "v1", "analyses"]:
+        return method == "POST"
+    return (
+        method == "GET"
+        and len(parts) == 4
+        and parts[:3] == ["api", "v1", "analyses"]
+        and bool(parts[3])
+    )
+
+
+def record_analysis_api_request(
+    registry: MetricsRegistry,
+    *,
+    outcome: str,
+    error_code: str,
+) -> None:
+    safe_outcome = outcome if outcome in ANALYSIS_API_OUTCOMES else "error"
+    if safe_outcome == "ready":
+        safe_code = "none"
+    elif error_code in ANALYSIS_API_ERROR_CODES and error_code != "none":
+        safe_code = error_code
+    else:
+        safe_code = "NOT_FOUND"
+    registry.analysis_api_requests_total.inc(outcome=safe_outcome, error_code=safe_code)
+
+
+def record_analysis_duration(registry: MetricsRegistry, *, stage: str, seconds: float) -> None:
+    safe_stage = stage if stage in ANALYSIS_STAGES else "total"
+    registry.analysis_duration_seconds.observe(seconds, stage=safe_stage)
+
+
+def record_analysis_cache(registry: MetricsRegistry, *, status: str) -> None:
+    safe_status = status if status in ANALYSIS_CACHE_STATUSES else "miss"
+    registry.analysis_cache_total.inc(status=safe_status)
+
+
+def record_analysis_result(registry: MetricsRegistry, *, status: str) -> None:
+    safe_status = status if status in ANALYSIS_RESULT_STATUSES else "partial"
+    registry.analysis_results_total.inc(status=safe_status)
+
+
+def record_analysis_coverage(registry: MetricsRegistry, *, bucket: str) -> None:
+    safe_bucket = bucket if bucket in ANALYSIS_COVERAGE_BUCKETS else "lt_60"
+    registry.analysis_coverage_total.inc(bucket=safe_bucket)
+
+
+def analysis_coverage_bucket(coverage: float) -> str:
+    if coverage < 0.60:
+        return "lt_60"
+    if coverage < 0.80:
+        return "60_79"
+    if coverage < 1.0:
+        return "80_99"
+    return "100"
+
+
+def record_analysis_unavailable(registry: MetricsRegistry, *, reason: str) -> None:
+    if reason not in ANALYSIS_UNAVAILABLE_REASONS:
+        return
+    registry.analysis_unavailable_signals_total.inc(reason=reason)
+
+
+def record_analysis_finding_count(registry: MetricsRegistry, *, count: int) -> None:
+    registry.analysis_finding_count.inc(amount=float(count))
+
+
+def record_analysis_goal_count(registry: MetricsRegistry, *, count: int) -> None:
+    registry.analysis_goal_count.inc(amount=float(count))
+
+
+def record_analysis_idempotency(registry: MetricsRegistry, *, result: str) -> None:
+    safe_result = result if result in ANALYSIS_IDEMPOTENCY_RESULTS else "reused"
+    registry.analysis_idempotency_total.inc(result=safe_result)
 
 
 def _label_key(labels: dict[str, str]) -> str:
@@ -290,6 +410,42 @@ class MetricsRegistry:
             "joint_evidence_api_requests_total",
             "Joint evidence API requests, labeled by closed-set outcome and error_code.",
         )
+        self.analysis_api_requests_total = Counter(
+            "analysis_api_requests_total",
+            "Analysis API requests, labeled by closed-set outcome and error_code.",
+        )
+        self.analysis_duration_seconds = Histogram(
+            "analysis_duration_seconds",
+            "Analysis latency in seconds, labeled by closed-set stage.",
+        )
+        self.analysis_cache_total = Counter(
+            "analysis_cache_total",
+            "Analysis cache lookups, labeled by closed-set status.",
+        )
+        self.analysis_results_total = Counter(
+            "analysis_results_total",
+            "Analysis results, labeled by closed-set status.",
+        )
+        self.analysis_coverage_total = Counter(
+            "analysis_coverage_total",
+            "Analysis coverage, labeled by closed-set bucket.",
+        )
+        self.analysis_unavailable_signals_total = Counter(
+            "analysis_unavailable_signals_total",
+            "Unavailable analysis signals, labeled by closed-set reason.",
+        )
+        self.analysis_finding_count = Counter(
+            "analysis_finding_count",
+            "Findings emitted by deterministic analysis.",
+        )
+        self.analysis_goal_count = Counter(
+            "analysis_goal_count",
+            "Goals emitted by deterministic analysis.",
+        )
+        self.analysis_idempotency_total = Counter(
+            "analysis_idempotency_total",
+            "Analysis persistence outcomes, labeled by closed-set result.",
+        )
 
     def render_prometheus_text(self) -> str:
         lines: list[str] = []
@@ -309,6 +465,14 @@ class MetricsRegistry:
             self.joint_evidence_window_truncations_total,
             self.joint_evidence_replay_coverage_total,
             self.joint_evidence_api_requests_total,
+            self.analysis_api_requests_total,
+            self.analysis_cache_total,
+            self.analysis_results_total,
+            self.analysis_coverage_total,
+            self.analysis_unavailable_signals_total,
+            self.analysis_finding_count,
+            self.analysis_goal_count,
+            self.analysis_idempotency_total,
         ):
             lines.append(f"# HELP {counter.name} {counter.description}")
             lines.append(f"# TYPE {counter.name} counter")
@@ -319,6 +483,7 @@ class MetricsRegistry:
             self.replay_cleanup_lag_seconds,
             self.riot_platform_detection_duration_seconds,
             self.joint_evidence_timeline_fetch_duration_seconds,
+            self.analysis_duration_seconds,
         ):
             lines.append(f"# HELP {histogram.name} {histogram.description}")
             lines.append(f"# TYPE {histogram.name} histogram")
@@ -350,13 +515,33 @@ def _format_labels(labels: dict[str, str]) -> str:
 metrics = MetricsRegistry()
 
 __all__ = [
+    "ANALYSIS_API_ERROR_CODES",
+    "ANALYSIS_API_OUTCOMES",
+    "ANALYSIS_CACHE_STATUSES",
+    "ANALYSIS_COVERAGE_BUCKETS",
+    "ANALYSIS_IDEMPOTENCY_RESULTS",
+    "ANALYSIS_RESULT_STATUSES",
+    "ANALYSIS_STAGES",
+    "ANALYSIS_UNAVAILABLE_REASONS",
     "Counter",
     "Gauge",
     "Histogram",
     "JOINT_EVIDENCE_API_ERROR_CODES",
     "JOINT_EVIDENCE_API_OUTCOMES",
     "MetricsRegistry",
+    "analysis_coverage_bucket",
+    "hashed_analysis_puuid",
+    "is_analysis_request",
     "is_joint_evidence_prepare_request",
     "metrics",
+    "record_analysis_api_request",
+    "record_analysis_cache",
+    "record_analysis_coverage",
+    "record_analysis_duration",
+    "record_analysis_finding_count",
+    "record_analysis_goal_count",
+    "record_analysis_idempotency",
+    "record_analysis_result",
+    "record_analysis_unavailable",
     "record_joint_evidence_api_request",
 ]

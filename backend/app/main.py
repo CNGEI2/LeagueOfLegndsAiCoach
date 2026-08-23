@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.analyses import router as analyses_router
 from app.api.health import router as health_router
 from app.api.internal import router as internal_router
 from app.api.matches import router as matches_router
@@ -92,6 +93,7 @@ def create_app(
     application.include_router(players_router)
     application.include_router(matches_router)
     application.include_router(replays_router)
+    application.include_router(analyses_router)
     return application
 
 

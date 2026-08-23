@@ -242,6 +242,55 @@ async def test_build_services_injects_shared_metrics_registry() -> None:
         await services.close()
 
 
+@pytest.mark.asyncio
+async def test_build_services_uses_disabled_analysis_when_flag_is_off() -> None:
+    from app.services.analyses.service import AnalysisService, DisabledAnalysisService
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        riot_api_key="RGAPI-test",
+        joint_evidence_enabled=True,
+        deterministic_analysis_enabled=False,
+        replay_enabled=False,
+    )
+    services = build_services(settings=settings, database=_StubDatabase())  # type: ignore[arg-type]
+    try:
+        assert isinstance(services.analysis_service, DisabledAnalysisService)
+        assert not isinstance(services.analysis_service, AnalysisService)
+    finally:
+        await services.close()
+
+
+@pytest.mark.asyncio
+async def test_build_services_wires_analysis_and_reuses_timeline() -> None:
+    from app.services.analyses.service import AnalysisService
+    from app.services.evidence.service import JointEvidenceService
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url="postgresql+asyncpg://user:pass@db:5432/lol_ai_coach",
+        riot_api_key="RGAPI-test",
+        joint_evidence_enabled=True,
+        deterministic_analysis_enabled=True,
+        replay_enabled=False,
+    )
+    services = build_services(settings=settings, database=_StubDatabase())  # type: ignore[arg-type]
+    try:
+        assert isinstance(services.analysis_service, AnalysisService)
+        assert isinstance(services.joint_evidence_service, JointEvidenceService)
+        assert (
+            services.analysis_service._timeline_service
+            is services.joint_evidence_service._timeline_service
+        )
+        assert services.analysis_service._match_service is services.match_service
+        assert services.analysis_service._metrics is not None
+    finally:
+        await services.close()
+
+
 def test_create_app_resolves_metrics_before_build_services_and_exposes_same_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

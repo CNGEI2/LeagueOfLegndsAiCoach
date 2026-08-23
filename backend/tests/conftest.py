@@ -84,6 +84,18 @@ class FakePlatformDetectionService:
         )
 
 
+class FakeAnalysisService:
+    async def create_or_reuse(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(
+            f"analysis service should not be called unexpectedly: {args} {kwargs}"
+        )
+
+    async def get(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError(
+            f"analysis service should not be called unexpectedly: {args} {kwargs}"
+        )
+
+
 @pytest.fixture
 def fake_services() -> AppServices:
     return AppServices(

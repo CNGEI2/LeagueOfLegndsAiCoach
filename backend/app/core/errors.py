@@ -7,7 +7,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.core.metrics import (
+    is_analysis_request,
     is_joint_evidence_prepare_request,
+    record_analysis_api_request,
     record_joint_evidence_api_request,
 )
 from app.schemas.errors import ErrorDetail, ErrorResponse
@@ -152,6 +154,7 @@ def _error_response(
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     _record_joint_evidence_api_error(request=request, error_code=code)
+    _record_analysis_api_error(request=request, error_code=code)
     response = ErrorResponse(
         error=ErrorDetail(
             code=code,
@@ -174,6 +177,18 @@ def _record_joint_evidence_api_error(*, request: Request, error_code: str) -> No
     if registry is None:
         return
     record_joint_evidence_api_request(registry, outcome="error", error_code=error_code)
+
+
+def _record_analysis_api_error(*, request: Request, error_code: str) -> None:
+    method = request.scope.get("method")
+    if not isinstance(method, str):
+        return
+    if not is_analysis_request(method=method, path=request.url.path):
+        return
+    registry = getattr(request.app.state, "replay_metrics", None)
+    if registry is None:
+        return
+    record_analysis_api_request(registry, outcome="error", error_code=error_code)
 
 
 async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:

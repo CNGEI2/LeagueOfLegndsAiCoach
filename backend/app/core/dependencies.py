@@ -8,6 +8,7 @@ from app.core.config import Settings
 from app.core.database import Database
 from app.core.metrics import MetricsRegistry
 from app.core.metrics import metrics as default_metrics
+from app.repositories.analyses import SqlAnalysisRepository
 from app.repositories.matches import SqlMatchRepository
 from app.repositories.platform_detections import SqlPlatformDetectionRepository
 from app.repositories.players import SqlPlayerRepository
@@ -18,6 +19,14 @@ from app.repositories.replays import (
     SqlReplayRepository,
 )
 from app.repositories.timelines import SqlTimelineRepository
+from app.services.analyses.metrics import MetricEngine
+from app.services.analyses.rules import RuleEngine
+from app.services.analyses.scoring import ScoreEngine
+from app.services.analyses.service import (
+    AnalysisResolver,
+    AnalysisService,
+    DisabledAnalysisService,
+)
 from app.services.evidence.replay import ReplayEvidenceLinker
 from app.services.evidence.service import (
     DisabledJointEvidenceService,
@@ -60,6 +69,7 @@ class AppServices:
     joint_evidence_service: JointEvidenceResolver = field(
         default_factory=DisabledJointEvidenceService
     )
+    analysis_service: AnalysisResolver = field(default_factory=DisabledAnalysisService)
 
     async def close(self) -> None:
         first_error: BaseException | None = None
@@ -136,6 +146,7 @@ def build_services(
         max_concurrency=settings.riot_max_concurrency,
     )
 
+    timeline_service: TimelineService | None = None
     if settings.joint_evidence_enabled:
         timeline_service = TimelineService(
             gateway=gateway,
@@ -159,12 +170,29 @@ def build_services(
     else:
         joint_evidence_service = DisabledJointEvidenceService()
 
+    if settings.deterministic_analysis_enabled:
+        if timeline_service is None:
+            raise RuntimeError("DETERMINISTIC_ANALYSIS_ENABLED requires joint evidence")
+        analysis_service: AnalysisResolver = AnalysisService(
+            match_service=match_service,
+            timeline_service=timeline_service,
+            repository=SqlAnalysisRepository(session_factory),
+            metric_engine=MetricEngine(),
+            score_engine=ScoreEngine(),
+            rule_engine=RuleEngine(),
+            retention_days=settings.analysis_retention_days,
+            metrics=registry,
+        )
+    else:
+        analysis_service = DisabledAnalysisService()
+
     return AppServices(
         player_service=player_service,
         match_service=match_service,
         replay_service=replay_service,
         platform_detection_service=platform_detection_service,
         joint_evidence_service=joint_evidence_service,
+        analysis_service=analysis_service,
         closers=(riot_raw_client, static_raw_client),
     )
 
