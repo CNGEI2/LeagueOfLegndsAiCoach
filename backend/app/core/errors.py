@@ -60,6 +60,15 @@ def player_not_found() -> ApiError:
     )
 
 
+def match_analysis_unsupported_mode() -> ApiError:
+    return ApiError(
+        status_code=422,
+        code="MATCH_ANALYSIS_UNSUPPORTED_MODE",
+        message="Match analysis is not supported for this game mode.",
+        retryable=False,
+    )
+
+
 def riot_platform_detection_unavailable(source: ApiError | None = None) -> ApiError:
     return ApiError(
         status_code=503,
