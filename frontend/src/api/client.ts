@@ -1,6 +1,7 @@
 import type { z } from "zod";
 
 import {
+  analysisResponseSchema,
   detectPlayerResponseSchema,
   errorResponseSchema,
   jointEvidenceResponseSchema,
@@ -267,6 +268,40 @@ export async function prepareMatchEvidence(input: PrepareMatchEvidenceInput, sig
       token: input.replay?.accessToken,
       signal,
     },
+  );
+}
+
+export type CreateAnalysisInput = {
+  platform: Platform;
+  matchId: string;
+  puuid: string;
+  locale: Locale;
+};
+
+export async function createAnalysis(input: CreateAnalysisInput, signal?: AbortSignal) {
+  return request("/api/v1/analyses", analysisResponseSchema, {
+    method: "POST",
+    body: {
+      platform: input.platform,
+      match_id: input.matchId,
+      puuid: input.puuid,
+      locale: input.locale,
+    },
+    signal,
+  });
+}
+
+export type GetAnalysisInput = {
+  analysisId: string;
+  locale: Locale;
+};
+
+export async function getAnalysis(input: GetAnalysisInput, signal?: AbortSignal) {
+  const query = new URLSearchParams({ locale: input.locale });
+  return request(
+    `/api/v1/analyses/${encodeURIComponent(input.analysisId)}?${query}`,
+    analysisResponseSchema,
+    { signal },
   );
 }
 

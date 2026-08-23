@@ -645,3 +645,201 @@ export type EvidenceArtifactReference = z.infer<typeof evidenceArtifactReference
 export type EvidenceWindow = z.infer<typeof evidenceWindowSchema>;
 export type ReplayLinkSummary = z.infer<typeof replayLinkSummarySchema>;
 export type JointEvidenceResponse = z.infer<typeof jointEvidenceResponseSchema>;
+
+const ANALYSIS_DIMENSION_ORDER = [
+  "economy",
+  "combat",
+  "survivability",
+  "team_objectives",
+  "vision",
+] as const;
+const OVERALL_COVERAGE_THRESHOLD = 0.6;
+const scoreValueSchema = z.number().min(0).max(100);
+const coverageSchema = z.number().min(0).max(1);
+
+export const analysisRoleSchema = z.enum(["top", "jungle", "mid", "bottom", "support"]);
+export const analysisDimensionSchema = z.enum(ANALYSIS_DIMENSION_ORDER);
+export const analysisUnavailableReasonSchema = z.enum([
+  "missing_match_value",
+  "invalid_duration",
+  "division_by_zero",
+  "timeline_unavailable",
+  "role_unavailable",
+  "opponent_unavailable",
+  "opponent_ambiguous",
+  "insufficient_team_values",
+]);
+
+const metricComparisonSchema = z
+  .object({
+    basis: z.enum(["team_percentile", "same_role"]),
+    score: scoreValueSchema,
+    opponent_value: z.number().nullable(),
+  })
+  .strict();
+
+export const analysisMetricSchema = z
+  .object({
+    evidence_id: z.string().min(1),
+    metric_key: z.string().min(1),
+    category: analysisDimensionSchema,
+    status: z.enum(["available", "unavailable"]),
+    value: z.number().nullable(),
+    unit: z.string().nullable(),
+    beneficial_direction: z.enum(["higher", "lower"]),
+    comparisons: z.array(metricComparisonSchema),
+    confidence: z.enum(["high", "medium", "low"]),
+    source_type: z.enum(["match", "timeline", "match_and_timeline"]),
+    source_fact_ids: z.array(z.string()),
+    unavailable_reason: analysisUnavailableReasonSchema.nullable(),
+    metric_version: z.literal("deterministic-metrics-v1"),
+  })
+  .strict()
+  .superRefine((metric, context) => {
+    const bases = metric.comparisons.map((item) => item.basis);
+    if (new Set(bases).size !== bases.length) {
+      context.addIssue({ code: "custom", message: "comparisons must be unique by basis" });
+    }
+    if (metric.status === "available") {
+      if (metric.value === null || metric.unit === null) {
+        context.addIssue({
+          code: "custom",
+          message: "available metrics require a value and unit",
+        });
+      }
+      if (metric.unavailable_reason !== null) {
+        context.addIssue({
+          code: "custom",
+          message: "available metrics must not set unavailable_reason",
+        });
+      }
+      return;
+    }
+    if (metric.value !== null) {
+      context.addIssue({ code: "custom", message: "unavailable metrics must not set a value" });
+    }
+    if (metric.unavailable_reason === null) {
+      context.addIssue({
+        code: "custom",
+        message: "unavailable metrics require unavailable_reason",
+      });
+    }
+  });
+
+export const dimensionScoreSchema = z
+  .object({
+    dimension: analysisDimensionSchema,
+    status: z.enum(["available", "unavailable"]),
+    score: scoreValueSchema.nullable(),
+    configured_weight: scoreValueSchema,
+    applied_weight: scoreValueSchema,
+    coverage: coverageSchema,
+    evidence_ids: z.array(z.string()),
+  })
+  .strict()
+  .superRefine((item, context) => {
+    if (item.status === "available" && item.score === null) {
+      context.addIssue({ code: "custom", message: "available dimension scores require a score" });
+    }
+    if (item.status === "unavailable" && item.score !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "unavailable dimension scores must not set a score",
+      });
+    }
+  });
+
+export const scoreBreakdownSchema = z
+  .object({
+    role: analysisRoleSchema.nullable(),
+    dimensions: z.array(dimensionScoreSchema).length(5),
+    overall_score: scoreValueSchema.nullable(),
+    coverage: coverageSchema,
+    score_version: z.literal("deterministic-score-v1"),
+  })
+  .strict()
+  .superRefine((scores, context) => {
+    const observed = scores.dimensions.map((item) => item.dimension);
+    if (observed.some((dimension, index) => dimension !== ANALYSIS_DIMENSION_ORDER[index])) {
+      context.addIssue({
+        code: "custom",
+        message: "scores require five unique dimensions in canonical order",
+      });
+    }
+    const overallForbidden = scores.role === null || scores.coverage < OVERALL_COVERAGE_THRESHOLD;
+    if (overallForbidden && scores.overall_score !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "overall score requires a known role and coverage of at least 0.60",
+      });
+    }
+  });
+
+export const analysisFindingSchema = z
+  .object({
+    rule_id: z.string().min(1),
+    kind: z.enum(["strength", "improvement"]),
+    severity: z.enum(["high", "medium", "low"]),
+    message_code: z.string().min(1),
+    params: z.record(z.string(), z.union([z.string(), z.number()])),
+    evidence_ids: z.array(z.string()),
+    confidence: z.enum(["high", "medium", "low"]),
+    requires_replay_interpretation: z.literal(false),
+  })
+  .strict();
+
+export const analysisGoalSchema = z
+  .object({
+    rule_id: z.string().min(1),
+    message_code: z.string().min(1),
+    current_value: z.number(),
+    target_value: z.number(),
+    unit: z.string().min(1),
+    role: analysisRoleSchema,
+    evidence_ids: z.array(z.string()),
+    rules_version: z.literal("deterministic-rules-v1"),
+  })
+  .strict();
+
+export const analysisResponseSchema = z
+  .object({
+    analysis_id: z.string().uuid(),
+    status: z.enum(["completed", "partial"]),
+    cached: z.boolean(),
+    locale: localeSchema,
+    role: analysisRoleSchema.nullable(),
+    metrics: z.array(analysisMetricSchema),
+    scores: scoreBreakdownSchema,
+    findings: z.array(analysisFindingSchema).max(3),
+    goals: z.array(analysisGoalSchema).max(3),
+    unavailable_reasons: z.array(analysisUnavailableReasonSchema),
+    input_hash: z.string().regex(/^[a-f0-9]{64}$/),
+    metric_version: z.literal("deterministic-metrics-v1"),
+    score_version: z.literal("deterministic-score-v1"),
+    rules_version: z.literal("deterministic-rules-v1"),
+    schema_version: z.literal(1),
+    scope_notice_code: z.literal("DETERMINISTIC_DATA_COACHING_NO_AI"),
+    request_id: requestIdSchema,
+  })
+  .strict()
+  .superRefine((response, context) => {
+    const catalog = new Set(response.metrics.map((metric) => metric.evidence_id));
+    const referenced = [
+      ...response.findings.flatMap((finding) => finding.evidence_ids),
+      ...response.goals.flatMap((goal) => goal.evidence_ids),
+    ];
+    if (referenced.some((evidenceId) => !catalog.has(evidenceId))) {
+      context.addIssue({
+        code: "custom",
+        message: "finding or goal references missing evidence",
+      });
+    }
+  });
+
+export type AnalysisRole = z.infer<typeof analysisRoleSchema>;
+export type AnalysisMetric = z.infer<typeof analysisMetricSchema>;
+export type DimensionScore = z.infer<typeof dimensionScoreSchema>;
+export type ScoreBreakdown = z.infer<typeof scoreBreakdownSchema>;
+export type AnalysisFinding = z.infer<typeof analysisFindingSchema>;
+export type AnalysisGoal = z.infer<typeof analysisGoalSchema>;
+export type AnalysisResponse = z.infer<typeof analysisResponseSchema>;
