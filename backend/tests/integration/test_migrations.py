@@ -104,6 +104,7 @@ async def test_upgrade_from_empty_schema_creates_riot_and_replay_tables(
         assert {"players", "recent_match_caches", "matches"}.issubset(tables)
         assert {"replay_uploads", "replay_jobs", "replay_artifacts"}.issubset(tables)
         assert "player_platform_detections" in tables
+        assert {"analysis_jobs", "analysis_evidence"}.issubset(tables)
         assert not {"timelines", "analyses", "scores", "replays"}.intersection(tables)
 
         replay_upload_columns = await _column_names(test_database_url, "replay_uploads")
@@ -647,6 +648,89 @@ async def test_match_timeline_database_checks_enforce_result_shapes(
                 normalized_snapshot=None,
                 snapshot_hash="e" * 64,
             )
+    finally:
+        await engine.dispose()
+        await _restore_head(test_database_url, config)
+
+
+async def _analysis_table_shape(
+    test_database_url: str, table_name: str
+) -> tuple[set[str], list[str], list[dict]]:
+    engine = create_async_engine(test_database_url)
+    try:
+        async with engine.connect() as connection:
+
+            def reflect(sync_connection):  # type: ignore[no-untyped-def]
+                inspector = inspect(sync_connection)
+                return (
+                    {column["name"] for column in inspector.get_columns(table_name)},
+                    inspector.get_pk_constraint(table_name)["constrained_columns"],
+                    inspector.get_indexes(table_name),
+                )
+
+            return await connection.run_sync(reflect)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_deterministic_analysis_migration_ends_at_0005(test_database_url: str) -> None:
+    config = _alembic_config(test_database_url)
+    engine = create_async_engine(test_database_url)
+    try:
+        await asyncio.to_thread(command.upgrade, config, "head")
+        async with engine.connect() as connection:
+            version = (
+                await connection.execute(text("SELECT version_num FROM alembic_version"))
+            ).scalar_one()
+        assert version == "0005_deterministic_analyses"
+
+        tables = await _table_names(test_database_url)
+        assert {"analysis_jobs", "analysis_evidence"}.issubset(tables)
+
+        job_columns, job_pk, job_indexes = await _analysis_table_shape(
+            test_database_url, "analysis_jobs"
+        )
+        assert job_columns == {
+            "id",
+            "platform",
+            "match_id",
+            "selected_puuid",
+            "idempotency_key",
+            "input_hash",
+            "status",
+            "metric_version",
+            "score_version",
+            "rules_version",
+            "created_at",
+            "updated_at",
+            "completed_at",
+            "expires_at",
+        }
+        assert job_pk == ["id"]
+        assert _has_index_on(job_indexes, ["idempotency_key"], unique=True)
+        assert _has_index_on(job_indexes, ["expires_at"], unique=False)
+        assert _has_index_on(job_indexes, ["platform", "match_id", "selected_puuid"], unique=False)
+
+        evidence_columns, evidence_pk, _indexes = await _analysis_table_shape(
+            test_database_url, "analysis_evidence"
+        )
+        assert evidence_columns == {
+            "analysis_id",
+            "evidence_catalog",
+            "deterministic_result",
+            "input_hash",
+            "schema_version",
+            "created_at",
+        }
+        assert evidence_pk == ["analysis_id"]
+
+        await asyncio.to_thread(command.downgrade, config, "0004_match_timelines")
+        tables_after = await _table_names(test_database_url)
+        assert "analysis_jobs" not in tables_after
+        assert "analysis_evidence" not in tables_after
+        assert "match_timelines" in tables_after
+        await asyncio.to_thread(command.upgrade, config, "head")
     finally:
         await engine.dispose()
         await _restore_head(test_database_url, config)

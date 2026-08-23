@@ -1,3 +1,8 @@
+from app.repositories.analyses import (
+    AnalysisRepository,
+    SqlAnalysisRepository,
+    StoredAnalysis,
+)
 from app.repositories.matches import MatchCacheConflict, MatchRepository, SqlMatchRepository
 from app.repositories.platform_detections import (
     DetectionStatus,
@@ -25,6 +30,7 @@ from app.repositories.timelines import (
 )
 
 __all__ = [
+    "AnalysisRepository",
     "DetectionStatus",
     "MatchCacheConflict",
     "MatchRepository",
@@ -37,6 +43,7 @@ __all__ = [
     "ReplayJobRepository",
     "ReplayRepository",
     "ReplayStateConflict",
+    "SqlAnalysisRepository",
     "SqlMatchRepository",
     "SqlPlatformDetectionRepository",
     "SqlPlayerRepository",
@@ -45,6 +52,7 @@ __all__ = [
     "SqlReplayJobRepository",
     "SqlReplayRepository",
     "SqlTimelineRepository",
+    "StoredAnalysis",
     "TimelineCacheRecord",
     "TimelineCacheStatus",
     "TimelineRepository",

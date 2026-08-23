@@ -1,3 +1,4 @@
+from app.models.analysis import AnalysisEvidenceRow, AnalysisJobRow
 from app.models.base import Base
 from app.models.match import MatchRow
 from app.models.platform_detection import PlatformDetectionRow
@@ -7,6 +8,8 @@ from app.models.replay import ReplayArtifactRow, ReplayJobRow, ReplayUploadRow
 from app.models.timeline import MatchTimelineRow
 
 __all__ = [
+    "AnalysisEvidenceRow",
+    "AnalysisJobRow",
     "Base",
     "MatchRow",
     "MatchTimelineRow",
