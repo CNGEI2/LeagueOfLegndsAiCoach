@@ -301,17 +301,18 @@ describe("MatchDetailClient", () => {
   });
 
   it.each([
-    ["en-US", "Support"],
-    ["zh-CN", "辅助"],
+    ["en-US", ["Top", "Jungle", "Mid", "Bottom", "Support"]],
+    ["zh-CN", ["上路", "打野", "中路", "下路", "辅助"]],
   ] as const)(
-    "maps the upstream UTILITY role to the product Support label in %s",
-    async (locale, expectedRole) => {
+    "localizes all upstream role codes in %s",
+    async (locale, expectedRoles) => {
+      const upstreamRoles = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"] as const;
       vi.mocked(getMatchDetail).mockResolvedValue({
         ...matchDetailFixture,
-        blue_team: [
-          { ...matchDetailFixture.blue_team[0], role: "UTILITY" },
-          ...matchDetailFixture.blue_team.slice(1),
-        ],
+        blue_team: matchDetailFixture.blue_team.map((participant, index) => ({
+          ...participant,
+          role: upstreamRoles[index],
+        })),
       });
       const { container } = render(
         <MatchDetailClient
@@ -323,8 +324,11 @@ describe("MatchDetailClient", () => {
         />,
       );
 
-      expect(await screen.findByText(expectedRole)).toBeVisible();
-      expect(container).not.toHaveTextContent(/UTILITY|Utility/);
+      expect(await screen.findByText(expectedRoles[0])).toBeVisible();
+      for (const expectedRole of expectedRoles) {
+        expect(screen.getAllByText(expectedRole).length).toBeGreaterThan(0);
+      }
+      expect(container).not.toHaveTextContent(/TOP|JUNGLE|MIDDLE|BOTTOM|UTILITY/);
     },
   );
 

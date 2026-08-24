@@ -250,6 +250,18 @@ describe("AnalysisSection", () => {
     expect(screen.queryByTestId("analysis-overall-score")).not.toBeInTheDocument();
   });
 
+  it("does not round partial coverage up to a whole percent", async () => {
+    const partialCoverage = response();
+    partialCoverage.scores = { ...partialCoverage.scores, coverage: 0.5975 };
+    createAnalysisMock.mockResolvedValue(partialCoverage);
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(screen.getByRole("button", { name: "Generate data review" }));
+    expect(await screen.findByText("Coverage: 59.8%")).toBeVisible();
+    expect(screen.queryByText("Coverage: 60%")).not.toBeInTheDocument();
+  });
+
   it("retries a retryable safe error and does not expose raw backend values", async () => {
     createAnalysisMock
       .mockRejectedValueOnce(
@@ -359,11 +371,36 @@ describe("AnalysisSection", () => {
     const report = await screen.findByTestId("analysis-report");
     expect(within(report).getAllByTestId("analysis-finding")).toHaveLength(3);
     expect(within(report).getAllByTestId("analysis-goal")).toHaveLength(3);
-    const evidenceButtons = within(report).getAllByRole("button", {
-      name: "Open timeline evidence",
+    const objectiveFinding = within(report)
+      .getByText(/Team objectives are a strong data result/)
+      .closest("li");
+    expect(objectiveFinding).not.toBeNull();
+    const evidenceButtons = within(objectiveFinding as HTMLElement).getAllByRole("button", {
+      name: /Open timeline evidence: Team objectives are a strong data result/,
     });
     expect(evidenceButtons).toHaveLength(1);
     await user.click(evidenceButtons[0]);
+    expect(onEvidenceFactRequest).toHaveBeenCalledWith(FACT_ID);
+  });
+
+  it("puts Timeline evidence controls inside the goal they support", async () => {
+    const onEvidenceFactRequest = vi.fn();
+    const timelineGoal = response();
+    timelineGoal.goals[0] = {
+      ...timelineGoal.goals[0],
+      evidence_ids: ["metric:v1:explicit_objective_events"],
+    };
+    createAnalysisMock.mockResolvedValue(timelineGoal);
+    const user = userEvent.setup();
+    renderSection({ onEvidenceFactRequest });
+
+    await user.click(screen.getByRole("button", { name: "Generate data review" }));
+    const goal = (await screen.findByText(/Raise vision score per minute/)).closest("li");
+    expect(goal).not.toBeNull();
+    const button = within(goal as HTMLElement).getByRole("button", {
+      name: /Open timeline evidence: Raise vision score per minute/,
+    });
+    await user.click(button);
     expect(onEvidenceFactRequest).toHaveBeenCalledWith(FACT_ID);
   });
 });

@@ -53,6 +53,9 @@ def log_safe_operation(
     retry_count: int,
     cache_status: Literal["hit", "miss", "refresh"] | None = None,
     player_reference: str | None = None,
+    metric_version: str | None = None,
+    score_version: str | None = None,
+    rules_version: str | None = None,
 ) -> None:
     context = current_safe_request_context()
     record: dict[str, str | int] = {
@@ -70,4 +73,10 @@ def log_safe_operation(
         record["cache_status"] = cache_status
     if player_reference is not None:
         record["player_reference_hash"] = hashed_player_reference(player_reference)
+    if metric_version is not None:
+        record["metric_version"] = metric_version
+    if score_version is not None:
+        record["score_version"] = score_version
+    if rules_version is not None:
+        record["rules_version"] = rules_version
     logger.info(json.dumps(record, separators=(",", ":"), sort_keys=True))

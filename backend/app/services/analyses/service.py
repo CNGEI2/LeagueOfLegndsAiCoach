@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, get_args
+from typing import Literal, Protocol, get_args
 from uuid import UUID
 
 from pydantic import ValidationError
 
 from app.core.errors import ApiError, match_analysis_unsupported_mode, not_found
+from app.core.logging import log_safe_operation
 from app.core.metrics import (
     ANALYSIS_API_OUTCOMES,
     ANALYSIS_CACHE_STATUSES,
@@ -193,6 +195,7 @@ class AnalysisService:
         clock: Callable[[], datetime] | None = None,
         metrics: MetricsRegistry | None = None,
         monotonic: Callable[[], float] | None = None,
+        logger: logging.Logger | None = None,
     ) -> None:
         self._match_service = match_service
         self._timeline_service = timeline_service
@@ -204,6 +207,7 @@ class AnalysisService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._metrics = metrics
         self._monotonic = monotonic or time.monotonic
+        self._logger = logger or logging.getLogger("lol_ai_coach.analyses")
 
     async def create_or_reuse(
         self, *, platform: Platform, match_id: str, puuid: str
@@ -287,15 +291,47 @@ class AnalysisService:
             persist_seconds=after_persist - after_compute,
             total_seconds=after_persist - started,
         )
+        self._log_analysis(
+            result=stored.result,
+            cache_status="miss" if created else "hit",
+            total_seconds=after_persist - started,
+        )
         return stored.analysis_id, stored.result, created
 
     async def get(self, *, analysis_id: UUID) -> DeterministicAnalysisResult:
+        started = self._monotonic()
         stored = await self._repository.get(analysis_id=analysis_id, now=self._clock())
         if stored is None:
             raise not_found()
         if self._metrics is not None:
             record_analysis_cache(self._metrics, status="hit")
+        self._log_analysis(
+            result=stored.result,
+            cache_status="hit",
+            total_seconds=self._monotonic() - started,
+        )
         return stored.result
+
+    def _log_analysis(
+        self,
+        *,
+        result: DeterministicAnalysisResult,
+        cache_status: Literal["hit", "miss"],
+        total_seconds: float,
+    ) -> None:
+        log_safe_operation(
+            self._logger,
+            event="deterministic_analysis",
+            safe_status=result.status,
+            upstream="local",
+            latency_ms=max(0, round(total_seconds * 1000)),
+            retry_count=0,
+            cache_status=cache_status,
+            player_reference=f"{result.platform.value}:{result.selected_puuid}",
+            metric_version=result.metric_version,
+            score_version=result.score_version,
+            rules_version=result.rules_version,
+        )
 
     def _record_create_metrics(
         self,

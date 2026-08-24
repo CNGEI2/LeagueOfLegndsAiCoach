@@ -35,7 +35,7 @@ function formatNumber(locale: Locale, value: number): string {
 }
 
 function formatPercent(locale: Locale, value: number): string {
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value * 100);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value * 100);
 }
 
 function dimensionLabel(dimension: DimensionScore["dimension"], messages: Messages): string {
@@ -246,6 +246,51 @@ function dimensionAvailability(dimension: DimensionScore, messages: Messages): s
   return messages.analysisAvailable;
 }
 
+function timelineFactIds(
+  evidenceIds: string[],
+  metrics: AnalysisMetric[],
+): string[] {
+  const referencedEvidence = new Set(evidenceIds);
+  return [
+    ...new Set(
+      metrics
+        .filter((metric) => referencedEvidence.has(metric.evidence_id))
+        .flatMap((metric) => metric.source_fact_ids),
+    ),
+  ];
+}
+
+function EvidenceActions({
+  context,
+  factIds,
+  messages,
+  onEvidenceFactRequest,
+}: {
+  context: string;
+  factIds: string[];
+  messages: Messages;
+  onEvidenceFactRequest: (factId: string) => void;
+}) {
+  if (factIds.length === 0) return null;
+  return (
+    <div className="analysis-evidence-actions">
+      {factIds.map((factId, index) => {
+        const ordinal = factIds.length > 1 ? ` (${index + 1}/${factIds.length})` : "";
+        return (
+          <button
+            key={factId}
+            type="button"
+            aria-label={`${messages.analysisEvidence}: ${context}${ordinal}`}
+            onClick={() => onEvidenceFactRequest(factId)}
+          >
+            {messages.analysisEvidence}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function AnalysisSection({
   locale,
   matchId,
@@ -371,9 +416,6 @@ function AnalysisReport({
   messages: Messages;
   onEvidenceFactRequest: (factId: string) => void;
 }) {
-  const timelineFacts = [
-    ...new Set(analysis.metrics.flatMap((metric) => metric.source_fact_ids)),
-  ];
   return (
     <div className="analysis-report" data-testid="analysis-report">
       <div className="analysis-scoreboard">
@@ -426,15 +468,24 @@ function AnalysisReport({
             <p className="analysis-empty">{messages.analysisNoFindings}</p>
           ) : (
             <ul className="analysis-card-list">
-              {analysis.findings.slice(0, 3).map((finding) => (
-                <li
-                  key={finding.rule_id}
-                  className={`analysis-card analysis-card-${finding.kind}`}
-                  data-testid="analysis-finding"
-                >
-                  <p>{findingMessage(finding, locale, messages)}</p>
-                </li>
-              ))}
+              {analysis.findings.slice(0, 3).map((finding) => {
+                const message = findingMessage(finding, locale, messages);
+                return (
+                  <li
+                    key={finding.rule_id}
+                    className={`analysis-card analysis-card-${finding.kind}`}
+                    data-testid="analysis-finding"
+                  >
+                    <p>{message}</p>
+                    <EvidenceActions
+                      context={message}
+                      factIds={timelineFactIds(finding.evidence_ids, analysis.metrics)}
+                      messages={messages}
+                      onEvidenceFactRequest={onEvidenceFactRequest}
+                    />
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>
@@ -445,11 +496,24 @@ function AnalysisReport({
             <p className="analysis-empty">{messages.analysisNoGoals}</p>
           ) : (
             <ul className="analysis-card-list">
-              {analysis.goals.slice(0, 3).map((goal) => (
-                <li key={goal.rule_id} className="analysis-card analysis-card-goal" data-testid="analysis-goal">
-                  <p>{goalMessage(goal, locale, messages)}</p>
-                </li>
-              ))}
+              {analysis.goals.slice(0, 3).map((goal) => {
+                const message = goalMessage(goal, locale, messages);
+                return (
+                  <li
+                    key={goal.rule_id}
+                    className="analysis-card analysis-card-goal"
+                    data-testid="analysis-goal"
+                  >
+                    <p>{message}</p>
+                    <EvidenceActions
+                      context={message}
+                      factIds={timelineFactIds(goal.evidence_ids, analysis.metrics)}
+                      messages={messages}
+                      onEvidenceFactRequest={onEvidenceFactRequest}
+                    />
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>
@@ -465,15 +529,6 @@ function AnalysisReport({
             </li>
           ))}
         </ul>
-        {timelineFacts.length > 0 ? (
-          <div className="analysis-evidence-actions">
-            {timelineFacts.map((factId) => (
-              <button key={factId} type="button" onClick={() => onEvidenceFactRequest(factId)}>
-                {messages.analysisEvidence}
-              </button>
-            ))}
-          </div>
-        ) : null}
       </section>
 
       <div className="analysis-boundaries">

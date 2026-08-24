@@ -17,8 +17,20 @@ function kda(participant: HydratedParticipant, messages: Messages) {
 }
 
 function participantRole(role: string | null, messages: Messages) {
-  if (role === "UTILITY") return messages.analysisRoleSupport;
-  return role ?? messages.unknownStatistic;
+  switch (role) {
+    case "TOP":
+      return messages.analysisRoleTop;
+    case "JUNGLE":
+      return messages.analysisRoleJungle;
+    case "MIDDLE":
+      return messages.analysisRoleMid;
+    case "BOTTOM":
+      return messages.analysisRoleBottom;
+    case "UTILITY":
+      return messages.analysisRoleSupport;
+    default:
+      return messages.unknownStatistic;
+  }
 }
 
 export function MatchTeamTable({

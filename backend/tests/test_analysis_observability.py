@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
+import logging
+from types import SimpleNamespace
 from typing import get_args
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.core import metrics as metrics_module
 from app.core.config import Settings
 from app.core.dependencies import AppServices
 from app.core.errors import ApiError
+from app.core.logging import bind_safe_request_context
 from app.core.metrics import MetricsRegistry
 from app.core.routing import Platform
 from app.main import create_app
@@ -126,12 +131,6 @@ def test_analysis_metric_label_allowlists_are_closed() -> None:
     assert "NOT_FOUND" in metrics_module.ANALYSIS_API_ERROR_CODES
     assert "VALIDATION_ERROR" in metrics_module.ANALYSIS_API_ERROR_CODES
     assert "RIOT_INVALID_RESPONSE" in metrics_module.ANALYSIS_API_ERROR_CODES
-    assert (
-        metrics_module.hashed_analysis_puuid("player-secret")
-        == (__import__("hashlib").sha256(b"player-secret").hexdigest()[:12])
-    )
-    assert len(metrics_module.hashed_analysis_puuid("player-secret")) == 12
-    assert "player-secret" not in metrics_module.hashed_analysis_puuid("player-secret")
 
 
 def test_record_helpers_reject_arbitrary_labels() -> None:
@@ -208,7 +207,7 @@ def test_analysis_api_records_allowlisted_service_errors() -> None:
 @pytest.mark.asyncio
 async def test_analysis_service_records_closed_compute_metrics() -> None:
     registry = MetricsRegistry()
-    times = iter([10.0, 10.4, 10.7])
+    times = iter([10.0, 10.4, 10.7, 11.0, 11.1])
     service = AnalysisService(
         match_service=AnalysisMatchService(snapshot=standard_analysis_match()),
         timeline_service=FakeTimelineService(),
@@ -243,3 +242,60 @@ async def test_analysis_service_records_closed_compute_metrics() -> None:
     loaded = await service.get(analysis_id=analysis_id)
     assert loaded == result
     assert registry.analysis_cache_total.value(status="hit") == 1.0
+
+
+@pytest.mark.asyncio
+async def test_analysis_service_emits_safe_structured_create_log(caplog) -> None:  # type: ignore[no-untyped-def]
+    times = iter([10.0, 10.4, 10.7])
+    service = AnalysisService(
+        match_service=AnalysisMatchService(snapshot=standard_analysis_match()),
+        timeline_service=FakeTimelineService(),
+        repository=FakeRepository(),
+        metric_engine=MetricEngine(),
+        score_engine=ScoreEngine(),
+        rule_engine=RuleEngine(),
+        retention_days=30,
+        clock=lambda: NOW,
+        monotonic=lambda: next(times),
+        logger=logging.getLogger("lol_ai_coach.analysis.test"),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/analyses",
+            "headers": [],
+            "route": SimpleNamespace(path="/api/v1/analyses"),
+        }
+    )
+    request.state.request_id = "request-analysis-safe-log"
+    dependency = bind_safe_request_context(request)
+    await anext(dependency)
+    try:
+        with caplog.at_level(logging.INFO, logger="lol_ai_coach.analysis.test"):
+            await service.create_or_reuse(
+                platform=Platform.NA1,
+                match_id="NA1_ANALYSIS_FIXTURE",
+                puuid=SELECTED_PUUID,
+            )
+    finally:
+        await dependency.aclose()
+
+    payload = json.loads(caplog.messages[-1])
+    assert payload == {
+        "cache_status": "miss",
+        "event": "deterministic_analysis",
+        "latency_ms": 700,
+        "metric_version": "deterministic-metrics-v1",
+        "player_reference_hash": payload["player_reference_hash"],
+        "request_id": "request-analysis-safe-log",
+        "retry_count": 0,
+        "route": "/api/v1/analyses",
+        "rules_version": "deterministic-rules-v1",
+        "safe_status": "completed",
+        "score_version": "deterministic-score-v1",
+        "upstream": "local",
+    }
+    assert len(payload["player_reference_hash"]) == 16
+    assert SELECTED_PUUID not in caplog.text
+    assert "NA1_ANALYSIS_FIXTURE" not in caplog.text

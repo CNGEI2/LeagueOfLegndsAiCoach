@@ -14,7 +14,6 @@ a shared multiprocess backend; that wiring is out of scope here.
 
 from __future__ import annotations
 
-import hashlib
 import threading
 from collections.abc import Iterable
 
@@ -140,10 +139,6 @@ ANALYSIS_UNAVAILABLE_REASONS = frozenset(
         "insufficient_team_values",
     }
 )
-
-
-def hashed_analysis_puuid(puuid: str) -> str:
-    return hashlib.sha256(puuid.encode("utf-8")).hexdigest()[:12]
 
 
 def is_analysis_request(*, method: str, path: str) -> bool:
@@ -530,7 +525,6 @@ __all__ = [
     "JOINT_EVIDENCE_API_OUTCOMES",
     "MetricsRegistry",
     "analysis_coverage_bucket",
-    "hashed_analysis_puuid",
     "is_analysis_request",
     "is_joint_evidence_prepare_request",
     "metrics",
