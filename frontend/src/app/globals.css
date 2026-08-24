@@ -713,6 +713,256 @@ footer {
   font-size: 0.82rem;
 }
 
+.analysis-section {
+  --analysis-blue: #86bff5;
+  --analysis-gold: #e8c36a;
+  position: relative;
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  overflow: hidden;
+  padding: 1.35rem;
+  border: 1px solid #36516d;
+  border-radius: 0.9rem;
+  background:
+    linear-gradient(135deg, rgb(34 61 84 / 36%), transparent 42%),
+    var(--surface);
+  box-shadow: inset 0 4px 0 var(--analysis-blue);
+}
+
+.analysis-section-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0;
+}
+
+.analysis-section-header h2,
+.analysis-section h3,
+.analysis-eyebrow,
+.analysis-section p {
+  margin: 0;
+}
+
+.analysis-section-header h2 {
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  letter-spacing: -0.025em;
+}
+
+.analysis-eyebrow {
+  margin-bottom: 0.35rem;
+  color: var(--analysis-blue);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.analysis-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.analysis-statuses span,
+.analysis-role {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.8rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #52687f;
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.analysis-generate {
+  justify-self: start;
+}
+
+.analysis-loading,
+.analysis-empty {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.analysis-alert {
+  display: grid;
+  gap: 0.75rem;
+  color: #ffb4b4;
+}
+
+.analysis-alert button {
+  justify-self: start;
+}
+
+.analysis-report {
+  display: grid;
+  gap: 1.2rem;
+  min-width: 0;
+}
+
+.analysis-scoreboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid #405973;
+  border-radius: 0.8rem;
+  background: rgb(7 15 27 / 72%);
+}
+
+.analysis-overall {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.25rem 0.85rem;
+  align-items: baseline;
+}
+
+.analysis-overall > span,
+.analysis-overall > small {
+  color: var(--muted);
+}
+
+.analysis-overall > small {
+  grid-column: 1 / -1;
+}
+
+.analysis-overall > strong {
+  color: var(--analysis-gold);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: clamp(2.25rem, 8vw, 4.5rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 0.9;
+}
+
+.analysis-dimension-grid,
+.analysis-card-list,
+.analysis-metrics ul {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analysis-dimension-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.analysis-dimension {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--surface-raised);
+}
+
+.analysis-dimension > span,
+.analysis-dimension > small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.analysis-dimension > strong {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-dimension-unavailable {
+  border-style: dashed;
+}
+
+.analysis-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.analysis-detail-grid > section,
+.analysis-metrics {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.analysis-section h3 {
+  font-size: 0.82rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.analysis-card {
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--analysis-blue);
+  border-radius: 0.65rem;
+  background: rgb(23 34 53 / 72%);
+  line-height: 1.55;
+}
+
+.analysis-card-improvement,
+.analysis-card-goal {
+  border-left-color: var(--analysis-gold);
+}
+
+.analysis-metrics ul {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+}
+
+.analysis-metrics li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.analysis-metrics li > span {
+  color: var(--muted);
+}
+
+.analysis-metrics li > strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-evidence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.analysis-evidence-actions button {
+  min-height: 2.5rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--analysis-blue);
+  background: transparent;
+  color: var(--analysis-blue);
+}
+
+.analysis-evidence-actions button:hover {
+  background: rgb(134 191 245 / 12%);
+}
+
+.analysis-boundaries {
+  display: grid;
+  gap: 0.55rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
 .evidence-section {
   display: grid;
   gap: 1rem;
@@ -732,6 +982,12 @@ footer {
   margin: 0;
   font-size: clamp(1.35rem, 3vw, 1.8rem);
   letter-spacing: -0.02em;
+}
+
+.evidence-section-header h2:focus-visible,
+.evidence-fact:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
 }
 
 .evidence-prepare-button {
@@ -841,6 +1097,10 @@ footer {
 }
 
 @media (max-width: 960px) {
+  .analysis-dimension-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .match-slip {
     grid-template-columns: minmax(0, 1fr) minmax(220px, 0.8fr);
   }
@@ -928,5 +1188,31 @@ footer {
 
   .team-table-region {
     border-radius: 0.65rem;
+  }
+
+  .analysis-section {
+    padding: 1rem;
+  }
+
+  .analysis-section-header,
+  .analysis-scoreboard {
+    display: grid;
+  }
+
+  .analysis-statuses {
+    justify-content: flex-start;
+  }
+
+  .analysis-role {
+    justify-self: start;
+  }
+
+  .analysis-dimension-grid,
+  .analysis-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-evidence-actions button {
+    width: 100%;
   }
 }

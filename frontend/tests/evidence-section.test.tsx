@@ -199,6 +199,7 @@ function renderSection(
     puuid: string;
     platform: "NA1" | "EUW1" | "KR";
     locale: "en-US" | "zh-CN";
+    focusRequest: { factId: string; nonce: number } | null;
   }> = {},
 ) {
   return render(
@@ -207,6 +208,7 @@ function renderSection(
       puuid={props.puuid ?? PUUID}
       platform={props.platform ?? "NA1"}
       locale={props.locale ?? "en-US"}
+      focusRequest={props.focusRequest ?? null}
     />,
   );
 }
@@ -327,6 +329,68 @@ describe("EvidenceSection", () => {
     expect(screen.getByText(messages.categoryCombatContext)).toBeVisible();
     expect(screen.getByText(messages.evidenceTimelineOnly)).toBeVisible();
     expect(screen.getByText(messages.coverageUnavailable)).toBeVisible();
+    expect(getReplayArtifactsMock).not.toHaveBeenCalled();
+  });
+
+  it("focuses an exact fact without preparing again when evidence is already ready", async () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const user = userEvent.setup();
+    const messages = getMessages("en-US");
+    const ready = timelineOnlyReady();
+    const factId = ready.facts[0].fact_id;
+    prepareMatchEvidenceMock.mockResolvedValue(ready);
+    const view = renderSection();
+
+    await user.click(screen.getByRole("button", { name: messages.prepareEvidence }));
+    const fact = await screen.findByText(messages.factKindChampionKill);
+    view.rerender(
+      <EvidenceSection
+        matchId={MATCH_ID}
+        puuid={PUUID}
+        platform="NA1"
+        locale="en-US"
+        focusRequest={{ factId, nonce: 1 }}
+      />,
+    );
+
+    await waitFor(() => expect(fact.closest("li")).toHaveFocus());
+    expect(fact.closest("li")).toHaveAttribute("id", `evidence-fact-${factId}`);
+    expect(fact.closest("li")).toHaveAttribute("tabindex", "-1");
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepares Timeline evidence once, then focuses the requested exact fact", async () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const ready = timelineOnlyReady();
+    const factId = ready.facts[0].fact_id;
+    prepareMatchEvidenceMock.mockResolvedValue(ready);
+    renderSection({ focusRequest: { factId, nonce: 4 } });
+
+    await waitFor(() => expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(1));
+    const fact = await screen.findByText(getMessages("en-US").factKindChampionKill);
+    await waitFor(() => expect(fact.closest("li")).toHaveFocus());
+    expect(prepareMatchEvidenceMock.mock.calls[0]?.[0]).not.toHaveProperty("replay");
+    expect(getReplayArtifactsMock).not.toHaveBeenCalled();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it("focuses the Evidence heading and announces a localized fallback when a fact is absent", async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const ready = timelineOnlyReady();
+    prepareMatchEvidenceMock.mockResolvedValue(ready);
+    renderSection({
+      locale: "zh-CN",
+      focusRequest: { factId: "timeline:missing", nonce: 9 },
+    });
+
+    const heading = await screen.findByRole("heading", { name: "准备时间线证据" });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(heading).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("status")).toHaveTextContent("对应的时间线证据不可用");
+    expect(prepareMatchEvidenceMock).toHaveBeenCalledTimes(1);
     expect(getReplayArtifactsMock).not.toHaveBeenCalled();
   });
 

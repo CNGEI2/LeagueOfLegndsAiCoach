@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiClientError, getMatchDetail } from "@/api/client";
 import type { MatchDetailResponse, Platform } from "@/api/schemas";
+import { AnalysisSection } from "@/components/analysis-section";
 import { DataState } from "@/components/data-state";
-import { EvidenceSection } from "@/components/evidence-section";
+import {
+  EvidenceSection,
+  type EvidenceFocusRequest,
+} from "@/components/evidence-section";
 import { MatchTeamTable } from "@/components/match-team-table";
 import { ReplaySection } from "@/components/replay-section";
 import type { Locale } from "@/i18n/locales";
@@ -41,7 +45,22 @@ export function MatchDetailClient({
   const messages = getMessages(locale);
   const [state, setState] = useState<RequestState<MatchDetailResponse>>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
+  const [evidenceFocusRequest, setEvidenceFocusRequest] =
+    useState<EvidenceFocusRequest | null>(null);
+  const evidenceFocusNonceRef = useRef(0);
   const requestKey = `${locale}:${platform}:${puuid}:${matchId}:${attempt}`;
+  const identityKey = `${locale}:${platform}:${puuid}:${matchId}`;
+
+  function requestEvidenceFact(factId: string) {
+    evidenceFocusNonceRef.current += 1;
+    setEvidenceFocusRequest({ factId, nonce: evidenceFocusNonceRef.current });
+  }
+
+  useEffect(() => {
+    // Evidence references belong to one match identity and must not cross into another route.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional prop-driven reset
+    setEvidenceFocusRequest(null);
+  }, [identityKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -152,6 +171,13 @@ export function MatchDetailClient({
           messages={messages}
         />
       </div>
+      <AnalysisSection
+        locale={locale}
+        matchId={data.match_id}
+        puuid={data.selected_puuid}
+        platform={data.platform}
+        onEvidenceFactRequest={requestEvidenceFact}
+      />
       <ReplaySection
         locale={locale}
         matchId={data.match_id}
@@ -164,6 +190,7 @@ export function MatchDetailClient({
         matchId={data.match_id}
         puuid={data.selected_puuid}
         platform={data.platform}
+        focusRequest={evidenceFocusRequest}
       />
     </main>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ApiClientError,
@@ -178,61 +178,76 @@ type EvidenceState =
       retryable: boolean;
     };
 
+export type EvidenceFocusRequest = { factId: string; nonce: number };
+
 export function EvidenceSection({
   matchId,
   puuid,
   platform,
   locale,
+  focusRequest = null,
 }: {
   matchId: string;
   puuid: string;
   platform: Platform;
   locale: Locale;
+  focusRequest?: EvidenceFocusRequest | null;
 }) {
   const messages = getMessages(locale);
   const [state, setState] = useState<EvidenceState>({ status: "idle" });
   const prepareAbortRef = useRef<AbortController | null>(null);
   const refreshAbortRef = useRef<AbortController | null>(null);
+  const focusAnnouncementRef = useRef<HTMLParagraphElement | null>(null);
   const requestKeyRef = useRef(0);
+  const startedFocusNonceRef = useRef<number | null>(null);
+  const completedFocusNonceRef = useRef<number | null>(null);
   const propsKey = `${matchId}:${platform}:${puuid}:${locale}`;
 
-  function abortAllWork() {
+  const abortAllWork = useCallback(() => {
     prepareAbortRef.current?.abort();
     prepareAbortRef.current = null;
     refreshAbortRef.current?.abort();
     refreshAbortRef.current = null;
-  }
+  }, []);
 
   useEffect(() => {
     abortAllWork();
     requestKeyRef.current += 1;
+    startedFocusNonceRef.current = null;
+    completedFocusNonceRef.current = null;
     // Reset to idle when the match/locale/platform/puuid identity changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional prop-driven reset
     setState({ status: "idle" });
-  }, [propsKey]);
+    if (focusAnnouncementRef.current) {
+      focusAnnouncementRef.current.textContent = "";
+      focusAnnouncementRef.current.removeAttribute("role");
+    }
+  }, [abortAllWork, propsKey]);
 
   useEffect(() => {
     return () => {
       abortAllWork();
     };
-  }, []);
+  }, [abortAllWork]);
 
-  async function prepareEvidence(
-    capability: ReplayCapability | null,
-    signal: AbortSignal,
-  ): Promise<JointEvidenceResponse> {
-    return prepareMatchEvidence(
-      capability
-        ? {
-            ...timelineOnlyInput(matchId, puuid, platform, locale),
-            replay: { replayId: capability.replayId, accessToken: capability.accessToken },
-          }
-        : timelineOnlyInput(matchId, puuid, platform, locale),
-      signal,
-    );
-  }
+  const prepareEvidence = useCallback(
+    async (
+      capability: ReplayCapability | null,
+      signal: AbortSignal,
+    ): Promise<JointEvidenceResponse> =>
+      prepareMatchEvidence(
+        capability
+          ? {
+              ...timelineOnlyInput(matchId, puuid, platform, locale),
+              replay: { replayId: capability.replayId, accessToken: capability.accessToken },
+            }
+          : timelineOnlyInput(matchId, puuid, platform, locale),
+        signal,
+      ),
+    [locale, matchId, platform, puuid],
+  );
 
-  async function runPrepare() {
+  const runPrepare = useCallback(async (timelineOnly = false) => {
     abortAllWork();
     const requestKey = requestKeyRef.current + 1;
     requestKeyRef.current = requestKey;
@@ -240,7 +255,7 @@ export function EvidenceSection({
     prepareAbortRef.current = controller;
     setState({ status: "loading" });
 
-    const capability = findReplayCapabilityForMatch(matchId, "ready");
+    const capability = timelineOnly ? null : findReplayCapabilityForMatch(matchId, "ready");
     let activeCapability = capability;
     let replayFallbackUsed = false;
 
@@ -336,7 +351,38 @@ export function EvidenceSection({
         retryable: true,
       });
     }
-  }
+  }, [abortAllWork, matchId, prepareEvidence]);
+
+  useEffect(() => {
+    if (!focusRequest || completedFocusNonceRef.current === focusRequest.nonce) return;
+    if (state.status === "ready") {
+      const fact = document.getElementById(`evidence-fact-${focusRequest.factId}`);
+      if (fact) {
+        fact.scrollIntoView?.({ block: "center" });
+        fact.focus();
+        if (focusAnnouncementRef.current) {
+          focusAnnouncementRef.current.textContent = "";
+          focusAnnouncementRef.current.removeAttribute("role");
+        }
+      } else {
+        const heading = document.getElementById("evidence-section-title");
+        heading?.focus();
+        if (focusAnnouncementRef.current) {
+          focusAnnouncementRef.current.textContent = messages.analysisEvidenceUnavailable;
+          focusAnnouncementRef.current.setAttribute("role", "status");
+        }
+      }
+      completedFocusNonceRef.current = focusRequest.nonce;
+      return;
+    }
+    if (
+      (state.status === "idle" || state.status === "error") &&
+      startedFocusNonceRef.current !== focusRequest.nonce
+    ) {
+      startedFocusNonceRef.current = focusRequest.nonce;
+      void runPrepare(true);
+    }
+  }, [focusRequest, messages.analysisEvidenceUnavailable, runPrepare, state.status]);
 
   function evidenceErrorState(error: unknown): Extract<EvidenceState, { status: "error" }> {
     if (error instanceof ApiClientError) {
@@ -429,8 +475,12 @@ export function EvidenceSection({
   return (
     <section className="evidence-section" aria-labelledby="evidence-section-title">
       <header className="evidence-section-header">
-        <h2 id="evidence-section-title">{messages.prepareEvidence}</h2>
+        <h2 id="evidence-section-title" tabIndex={-1}>
+          {messages.prepareEvidence}
+        </h2>
       </header>
+
+      <p ref={focusAnnouncementRef} className="sr-only" aria-live="polite" aria-atomic="true" />
 
       {state.status === "idle" ? (
         <button type="button" className="evidence-prepare-button" onClick={() => void runPrepare()}>
@@ -506,7 +556,12 @@ function EvidenceReadyView({
       {!isEmpty && evidence.facts.length > 0 ? (
         <ul className="evidence-fact-list">
           {evidence.facts.map((fact) => (
-            <li key={fact.fact_id} className="evidence-fact">
+            <li
+              key={fact.fact_id}
+              id={`evidence-fact-${fact.fact_id}`}
+              className="evidence-fact"
+              tabIndex={-1}
+            >
               <span className="evidence-fact-kind">{factKindLabel(fact.kind, messages)}</span>
               <span className="evidence-fact-relationship">
                 {relationshipLabel(fact.relationship, messages)}

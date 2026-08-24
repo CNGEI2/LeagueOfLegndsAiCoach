@@ -170,4 +170,87 @@ export const enUS = {
   evidenceTruncatedNotice: "Showing {shown} of {total} candidate windows.",
   evidenceNotFound: "Timeline evidence is not available.",
   evidenceValidationError: "The evidence request could not be validated.",
+  analysisEyebrow: "DETERMINISTIC DATA REVIEW",
+  analysisTitle: "Match data review",
+  analysisGenerate: "Generate data review",
+  analysisGenerating: "Generating data review…",
+  analysisCompleted: "Complete",
+  analysisPartial: "Partial data",
+  analysisCached: "Cached result",
+  analysisOverall: "Overall score",
+  analysisOverallUnavailable: "Overall score unavailable",
+  analysisCoverage: "Coverage: {coverage}%",
+  analysisRole: "Role: {role}",
+  analysisRoleUnavailable: "Role unavailable",
+  analysisAvailable: "Available",
+  analysisPartiallyAvailable: "Partially available",
+  analysisUnavailable: "Unavailable",
+  analysisFindings: "Data findings",
+  analysisGoals: "Next-match goals",
+  analysisMetrics: "Supporting metrics",
+  analysisNoFindings: "No finding meets the deterministic reporting threshold.",
+  analysisNoGoals: "No goal meets the deterministic reporting threshold.",
+  analysisDeterministicNotice:
+    "This review uses deterministic match data rules only. No AI model or replay interpretation is used.",
+  analysisNotRiotScore:
+    "This is a single-match LoL AI Coach score, not a Riot score, rank, MMR, or ELO.",
+  analysisEvidence: "Open timeline evidence",
+  analysisEvidenceUnavailable: "The referenced timeline evidence is unavailable.",
+  analysisMessageUnavailable: "Structured detail unavailable",
+  analysisErrorUnsupported: "Data review is not supported for this match mode.",
+  analysisErrorNotFound: "This match or data review could not be found.",
+  analysisErrorPlayerNotInMatch: "This player is not in the match data.",
+  analysisErrorValidation: "The data review request could not be validated.",
+  analysisErrorAuth: "Riot data authorization failed.",
+  analysisErrorRateLimited: "Riot is busy. Try again in {seconds} seconds.",
+  analysisErrorRateLimitedNoDelay: "Riot is busy. Try again shortly.",
+  analysisErrorUnavailable: "Riot data is temporarily unavailable.",
+  analysisErrorInvalidResponse: "The data review response could not be verified.",
+  analysisErrorGeneric: "The data review could not be generated.",
+  analysisDimensionEconomy: "Economy",
+  analysisDimensionCombat: "Combat",
+  analysisDimensionSurvivability: "Survivability",
+  analysisDimensionTeamObjectives: "Team objectives",
+  analysisDimensionVision: "Vision",
+  analysisRoleTop: "Top",
+  analysisRoleJungle: "Jungle",
+  analysisRoleMid: "Mid",
+  analysisRoleBottom: "Bottom",
+  analysisRoleSupport: "Support",
+  analysisMetricKda: "K/D/A ratio",
+  analysisMetricCsPerMinute: "CS per minute",
+  analysisMetricGoldPerMinute: "Gold per minute",
+  analysisMetricDamagePerMinute: "Damage per minute",
+  analysisMetricKillParticipation: "Kill participation",
+  analysisMetricDeathsPer10: "Deaths per 10 minutes",
+  analysisMetricVisionPerMinute: "Vision score per minute",
+  analysisMetricObjectiveEvents: "Objective events",
+  analysisFindingEconomyStrength:
+    "Economy is a strong data result: {score}/100 at {coverage}% coverage.",
+  analysisFindingEconomyImprovement:
+    "Economy is a data improvement target: {score}/100 at {coverage}% coverage.",
+  analysisFindingCombatStrength:
+    "Combat is a strong data result: {score}/100 at {coverage}% coverage.",
+  analysisFindingCombatImprovement:
+    "Combat is a data improvement target: {score}/100 at {coverage}% coverage.",
+  analysisFindingSurvivabilityStrength:
+    "Survivability is a strong data result: {score}/100 at {coverage}% coverage.",
+  analysisFindingSurvivabilityImprovement:
+    "Survivability is a data improvement target: {score}/100 at {coverage}% coverage.",
+  analysisFindingTeamObjectivesStrength:
+    "Team objectives are a strong data result: {score}/100 at {coverage}% coverage.",
+  analysisFindingTeamObjectivesImprovement:
+    "Team objectives are a data improvement target: {score}/100 at {coverage}% coverage.",
+  analysisFindingVisionStrength:
+    "Vision is a strong data result: {score}/100 at {coverage}% coverage.",
+  analysisFindingVisionImprovement:
+    "Vision is a data improvement target: {score}/100 at {coverage}% coverage.",
+  analysisGoalCsPerMinute: "Raise CS per minute from {current} to {target}.",
+  analysisGoalDeathsPer10:
+    "Keep deaths per 10 minutes at or below {target}; current value: {current}.",
+  analysisGoalDamagePerMinute: "Raise damage per minute from {current} to {target}.",
+  analysisGoalKillParticipation:
+    "Raise kill participation from {current} to {target}.",
+  analysisGoalVisionPerMinute:
+    "Raise vision score per minute from {current} to {target}.",
 } as const;

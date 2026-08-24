@@ -235,3 +235,114 @@ describe("joint evidence bilingual keys", () => {
     }
   });
 });
+
+describe("deterministic analysis bilingual keys", () => {
+  const requiredKeys = [
+    "analysisEyebrow",
+    "analysisTitle",
+    "analysisGenerate",
+    "analysisGenerating",
+    "analysisCompleted",
+    "analysisPartial",
+    "analysisCached",
+    "analysisOverall",
+    "analysisOverallUnavailable",
+    "analysisCoverage",
+    "analysisRole",
+    "analysisRoleUnavailable",
+    "analysisAvailable",
+    "analysisPartiallyAvailable",
+    "analysisUnavailable",
+    "analysisFindings",
+    "analysisGoals",
+    "analysisMetrics",
+    "analysisNoFindings",
+    "analysisNoGoals",
+    "analysisDeterministicNotice",
+    "analysisNotRiotScore",
+    "analysisEvidence",
+    "analysisEvidenceUnavailable",
+    "analysisMessageUnavailable",
+    "analysisErrorUnsupported",
+    "analysisErrorNotFound",
+    "analysisErrorPlayerNotInMatch",
+    "analysisErrorValidation",
+    "analysisErrorAuth",
+    "analysisErrorRateLimited",
+    "analysisErrorRateLimitedNoDelay",
+    "analysisErrorUnavailable",
+    "analysisErrorInvalidResponse",
+    "analysisErrorGeneric",
+    "analysisDimensionEconomy",
+    "analysisDimensionCombat",
+    "analysisDimensionSurvivability",
+    "analysisDimensionTeamObjectives",
+    "analysisDimensionVision",
+    "analysisRoleTop",
+    "analysisRoleJungle",
+    "analysisRoleMid",
+    "analysisRoleBottom",
+    "analysisRoleSupport",
+    "analysisMetricKda",
+    "analysisMetricCsPerMinute",
+    "analysisMetricGoldPerMinute",
+    "analysisMetricDamagePerMinute",
+    "analysisMetricKillParticipation",
+    "analysisMetricDeathsPer10",
+    "analysisMetricVisionPerMinute",
+    "analysisMetricObjectiveEvents",
+    "analysisFindingEconomyStrength",
+    "analysisFindingEconomyImprovement",
+    "analysisFindingCombatStrength",
+    "analysisFindingCombatImprovement",
+    "analysisFindingSurvivabilityStrength",
+    "analysisFindingSurvivabilityImprovement",
+    "analysisFindingTeamObjectivesStrength",
+    "analysisFindingTeamObjectivesImprovement",
+    "analysisFindingVisionStrength",
+    "analysisFindingVisionImprovement",
+    "analysisGoalCsPerMinute",
+    "analysisGoalDeathsPer10",
+    "analysisGoalDamagePerMinute",
+    "analysisGoalKillParticipation",
+    "analysisGoalVisionPerMinute",
+  ] as const;
+
+  it("contains the complete panel, role, metric, finding, goal, and safe-error catalogs", () => {
+    const en = getMessages("en-US") as Record<string, string>;
+    const zh = getMessages("zh-CN") as Record<string, string>;
+
+    for (const key of requiredKeys) {
+      expect(en[key], `missing en key ${key}`).toEqual(expect.any(String));
+      expect(en[key]!.trim().length).toBeGreaterThan(0);
+      expect(zh[key], `missing zh key ${key}`).toEqual(expect.any(String));
+      expect(zh[key]!.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("uses Support and 辅助 without leaking the upstream UTILITY name", () => {
+    const en = getMessages("en-US");
+    const zh = getMessages("zh-CN");
+    const analysisValues = requiredKeys.flatMap((key) => [en[key], zh[key]]);
+
+    expect(en.analysisRoleSupport).toBe("Support");
+    expect(zh.analysisRoleSupport).toBe("辅助");
+    expect(analysisValues.join(" ")).not.toMatch(/Utility|UTILITY/);
+  });
+
+  it("states the deterministic boundary without claiming Riot rank or inferred play quality", () => {
+    const en = getMessages("en-US");
+    const zh = getMessages("zh-CN");
+    const analysisValues = requiredKeys.flatMap((key) => [en[key], zh[key]]).join(" ");
+
+    expect(en.analysisDeterministicNotice).toMatch(/deterministic/i);
+    expect(en.analysisDeterministicNotice).toMatch(/no ai/i);
+    expect(zh.analysisDeterministicNotice).toMatch(/确定性/);
+    expect(zh.analysisDeterministicNotice).toMatch(/不使用.*AI|未使用.*AI/);
+    expect(en.analysisNotRiotScore).toMatch(/not.*Riot.*score.*rank.*MMR.*ELO/i);
+    expect(zh.analysisNotRiotScore).toMatch(/不是.*Riot.*评分.*段位.*MMR.*ELO/i);
+    expect(analysisValues).not.toMatch(
+      /positioning|mechanics|awareness|intent|causality|走位|操作水平|意识|意图|因果/i,
+    );
+  });
+});

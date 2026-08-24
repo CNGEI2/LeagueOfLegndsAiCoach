@@ -53,17 +53,47 @@ vi.mock("@/components/replay-section", () => ({
   ),
 }));
 
+vi.mock("@/components/analysis-section", () => ({
+  AnalysisSection: ({
+    matchId,
+    puuid,
+    platform,
+    locale,
+    onEvidenceFactRequest,
+  }: {
+    matchId: string;
+    puuid: string;
+    platform: string;
+    locale: string;
+    onEvidenceFactRequest: (factId: string) => void;
+  }) => (
+    <section
+      data-testid="analysis-section"
+      data-match-id={matchId}
+      data-puuid={puuid}
+      data-platform={platform}
+      data-locale={locale}
+    >
+      <button type="button" onClick={() => onEvidenceFactRequest("timeline:requested-fact")}>
+        Request evidence fact
+      </button>
+    </section>
+  ),
+}));
+
 vi.mock("@/components/evidence-section", () => ({
   EvidenceSection: ({
     matchId,
     puuid,
     platform,
     locale,
+    focusRequest,
   }: {
     matchId: string;
     puuid: string;
     platform: string;
     locale: string;
+    focusRequest: { factId: string; nonce: number } | null;
   }) => (
     <section
       data-testid="evidence-section"
@@ -71,6 +101,8 @@ vi.mock("@/components/evidence-section", () => ({
       data-puuid={puuid}
       data-platform={platform}
       data-locale={locale}
+      data-focus-fact={focusRequest?.factId ?? ""}
+      data-focus-nonce={focusRequest?.nonce ?? ""}
     />
   ),
 }));
@@ -167,6 +199,12 @@ describe("MatchDetailClient", () => {
     expect(screen.getByAltText("Champion: Ahri")).toHaveAttribute("src", "https://cdn.example/champions/103.png");
     expect(screen.getAllByAltText("Item: Doran's Blade")).not.toHaveLength(0);
 
+    const analysis = screen.getByTestId("analysis-section");
+    expect(analysis).toHaveAttribute("data-match-id", "NA1_123456789");
+    expect(analysis).toHaveAttribute("data-puuid", "selected-puuid");
+    expect(analysis).toHaveAttribute("data-platform", "NA1");
+    expect(analysis).toHaveAttribute("data-locale", "en-US");
+
     const replay = screen.getByTestId("replay-section");
     expect(replay).toHaveAttribute("data-match-id", "NA1_123456789");
     expect(replay).toHaveAttribute("data-puuid", "selected-puuid");
@@ -179,7 +217,31 @@ describe("MatchDetailClient", () => {
     expect(evidence).toHaveAttribute("data-puuid", "selected-puuid");
     expect(evidence).toHaveAttribute("data-platform", "NA1");
     expect(evidence).toHaveAttribute("data-locale", "en-US");
+    expect(analysis.compareDocumentPosition(replay) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(replay.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("forwards repeat analysis evidence requests with a monotonically increasing nonce", async () => {
+    vi.mocked(getMatchDetail).mockResolvedValue(matchDetailFixture);
+    const user = userEvent.setup();
+    render(
+      <MatchDetailClient
+        locale="en-US"
+        matchId="NA1_123456789"
+        puuid="selected-puuid"
+        platform="NA1"
+      />,
+    );
+
+    const request = await screen.findByRole("button", { name: "Request evidence fact" });
+    await user.click(request);
+    expect(screen.getByTestId("evidence-section")).toHaveAttribute(
+      "data-focus-fact",
+      "timeline:requested-fact",
+    );
+    expect(screen.getByTestId("evidence-section")).toHaveAttribute("data-focus-nonce", "1");
+    await user.click(request);
+    expect(screen.getByTestId("evidence-section")).toHaveAttribute("data-focus-nonce", "2");
   });
 
   it("keeps internal participant IDs private and uses stable team-local labels", async () => {
@@ -320,6 +382,7 @@ describe("MatchDetailClient platform propagation", () => {
         expect.any(AbortSignal),
       );
       expect(screen.getByTestId("replay-section")).toHaveAttribute("data-platform", platform);
+      expect(screen.getByTestId("analysis-section")).toHaveAttribute("data-platform", platform);
       expect(screen.getByTestId("evidence-section")).toHaveAttribute("data-platform", platform);
       expect(screen.getByTestId("evidence-section")).toHaveAttribute(
         "data-match-id",
