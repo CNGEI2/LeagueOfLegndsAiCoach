@@ -214,13 +214,9 @@ class AnalysisService:
             participant for participant in match.participants if participant.puuid == puuid
         )
         role = normalize_analysis_role(selected.role)
-        metrics = self._metric_engine.compute(
-            match=match, timeline=timeline, selected_puuid=puuid
-        )
+        metrics = self._metric_engine.compute(match=match, timeline=timeline, selected_puuid=puuid)
         scores = self._score_engine.compute(role=role, metrics=metrics)
-        findings, goals = self._rule_engine.evaluate(
-            role=role, metrics=metrics, scores=scores
-        )
+        findings, goals = self._rule_engine.evaluate(role=role, metrics=metrics, scores=scores)
         unavailable_reasons = _collect_unavailable_reasons(
             metrics=metrics, role=role, timeline_unavailable=timeline_unavailable
         )
@@ -314,9 +310,7 @@ class AnalysisService:
         record_analysis_finding_count(self._metrics, count=len(result.findings))
         record_analysis_goal_count(self._metrics, count=len(result.goals))
 
-    async def _load_match(
-        self, *, platform: Platform, match_id: str, puuid: str
-    ) -> MatchSnapshot:
+    async def _load_match(self, *, platform: Platform, match_id: str, puuid: str) -> MatchSnapshot:
         try:
             return await self._match_service.get_evidence_context(
                 platform=platform, match_id=match_id, puuid=puuid
@@ -330,9 +324,7 @@ class AnalysisService:
         self, *, platform: Platform, match_id: str
     ) -> tuple[TimelineSnapshot | None, bool]:
         try:
-            loaded = await self._timeline_service.get_timeline(
-                platform=platform, match_id=match_id
-            )
+            loaded = await self._timeline_service.get_timeline(platform=platform, match_id=match_id)
         except ApiError as error:
             if error.code in _SAFE_TIMELINE_ERRORS:
                 return None, True

@@ -126,8 +126,9 @@ def test_analysis_metric_label_allowlists_are_closed() -> None:
     assert "NOT_FOUND" in metrics_module.ANALYSIS_API_ERROR_CODES
     assert "VALIDATION_ERROR" in metrics_module.ANALYSIS_API_ERROR_CODES
     assert "RIOT_INVALID_RESPONSE" in metrics_module.ANALYSIS_API_ERROR_CODES
-    assert metrics_module.hashed_analysis_puuid("player-secret") == (
-        __import__("hashlib").sha256(b"player-secret").hexdigest()[:12]
+    assert (
+        metrics_module.hashed_analysis_puuid("player-secret")
+        == (__import__("hashlib").sha256(b"player-secret").hexdigest()[:12])
     )
     assert len(metrics_module.hashed_analysis_puuid("player-secret")) == 12
     assert "player-secret" not in metrics_module.hashed_analysis_puuid("player-secret")
@@ -175,9 +176,7 @@ def test_analysis_api_records_ready_and_validation_error() -> None:
             json={"platform": "NA1", "match_id": MATCH_ID, "puuid": "player-1"},
         )
         assert ready.status_code == 200
-        assert (
-            registry.analysis_api_requests_total.value(outcome="ready", error_code="none") == 1.0
-        )
+        assert registry.analysis_api_requests_total.value(outcome="ready", error_code="none") == 1.0
         rendered = registry.render_prometheus_text()
         assert SELECTED_PUUID not in rendered
         assert SECRET_PUUID not in ready.text

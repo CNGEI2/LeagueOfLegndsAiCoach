@@ -91,9 +91,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_feature_settings(self) -> Self:
         if self.deterministic_analysis_enabled and not self.joint_evidence_enabled:
-            raise ValueError(
-                "DETERMINISTIC_ANALYSIS_ENABLED requires JOINT_EVIDENCE_ENABLED=true"
-            )
+            raise ValueError("DETERMINISTIC_ANALYSIS_ENABLED requires JOINT_EVIDENCE_ENABLED=true")
         if not self.replay_enabled:
             return self
 

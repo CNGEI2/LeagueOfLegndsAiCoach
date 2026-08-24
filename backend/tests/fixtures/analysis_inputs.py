@@ -169,9 +169,7 @@ def standard_analysis_match() -> MatchSnapshot:
     )
 
 
-def replace_participant(
-    match: MatchSnapshot, puuid: str, **updates: object
-) -> MatchSnapshot:
+def replace_participant(match: MatchSnapshot, puuid: str, **updates: object) -> MatchSnapshot:
     participants = tuple(
         participant.model_copy(update=updates) if participant.puuid == puuid else participant
         for participant in match.participants
@@ -189,8 +187,7 @@ def toggle_won(match: MatchSnapshot) -> MatchSnapshot:
 
 def standard_analysis_timeline() -> TimelineSnapshot:
     participant_puuids = {
-        index: puuid
-        for index, (puuid, _role) in enumerate((*BLUE_ROLES, *RED_ROLES), start=1)
+        index: puuid for index, (puuid, _role) in enumerate((*BLUE_ROLES, *RED_ROLES), start=1)
     }
     return TimelineSnapshot(
         platform=Platform.NA1,

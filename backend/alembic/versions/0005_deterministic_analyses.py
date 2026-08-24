@@ -66,9 +66,7 @@ def upgrade() -> None:
         sa.Column("schema_version", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("schema_version > 0", name=_CK_ANALYSIS_EVIDENCE_SCHEMA_VERSION),
-        sa.ForeignKeyConstraint(
-            ["analysis_id"], ["analysis_jobs.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["analysis_id"], ["analysis_jobs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("analysis_id"),
     )
 

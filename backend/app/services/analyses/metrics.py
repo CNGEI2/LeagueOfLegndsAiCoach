@@ -366,9 +366,7 @@ class MetricEngine:
         team_kills = _team_kills(match, selected.team_id)
         duration_seconds = match.duration_seconds
         builders = {
-            "kda": lambda: _compute_kda(
-                match, selected, duration_seconds, team_kills, timeline
-            ),
+            "kda": lambda: _compute_kda(match, selected, duration_seconds, team_kills, timeline),
             "kill_participation": lambda: _compute_kill_participation(
                 match, selected, duration_seconds, team_kills, timeline
             ),
