@@ -31,6 +31,15 @@ _RATE_FIELDS: dict[str, tuple[str, float, DimensionKey, str, Literal["higher", "
     "deaths_per_10": ("deaths", 10.0, "survivability", "per_10_minutes", "lower"),
     "vision_per_min": ("vision_score", 1.0, "vision", "per_minute", "higher"),
 }
+_NONNEGATIVE_PARTICIPANT_FIELDS = (
+    "kills",
+    "deaths",
+    "assists",
+    "cs",
+    "gold_earned",
+    "damage_to_champions",
+    "vision_score",
+)
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float | None:
@@ -136,14 +145,20 @@ def _scaled_rate(
 
 
 def _team_kills(match: MatchSnapshot, team_id: int) -> int | None:
-    total = 0
-    found = False
+    team = tuple(
+        participant for participant in match.participants if participant.team_id == team_id
+    )
+    if not team or any(participant.kills is None for participant in team):
+        return None
+    return sum(participant.kills or 0 for participant in team)
+
+
+def _validate_nonnegative_participant_values(match: MatchSnapshot) -> None:
     for participant in match.participants:
-        if participant.team_id != team_id or participant.kills is None:
-            continue
-        total += participant.kills
-        found = True
-    return total if found else None
+        for field_name in _NONNEGATIVE_PARTICIPANT_FIELDS:
+            value = getattr(participant, field_name)
+            if value is not None and value < 0:
+                raise ValueError("invalid negative match value")
 
 
 def _kill_participation_value(
@@ -241,7 +256,7 @@ def _same_role_comparison(
         opponent,
         metric_key,
         duration_seconds=duration_seconds,
-        team_kills=team_kills,
+        team_kills=_team_kills(match, opponent.team_id),
         timeline=timeline,
     )
     if opponent_value is None:
@@ -362,6 +377,7 @@ class MetricEngine:
         timeline: TimelineSnapshot | None,
         selected_puuid: str,
     ) -> tuple[MetricEvidence, ...]:
+        _validate_nonnegative_participant_values(match)
         selected = _selected_participant(match, selected_puuid)
         team_kills = _team_kills(match, selected.team_id)
         duration_seconds = match.duration_seconds

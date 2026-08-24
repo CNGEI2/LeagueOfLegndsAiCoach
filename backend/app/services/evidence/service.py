@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 from uuid import UUID
 
-from app.core.errors import ApiError, not_found
+from app.core.errors import not_found
 from app.core.metrics import MetricsRegistry
 from app.core.routing import Platform
 from app.schemas.domain import Locale, MatchSnapshot
@@ -26,6 +26,7 @@ from app.schemas.evidence import (
     ReplayLinkSummary,
 )
 from app.services.evidence.domain import LinkedEvidenceWindow, PlannedEvidenceWindow
+from app.services.evidence.roster import join_match_timeline_rosters
 from app.services.evidence.windows import EvidenceWindowPlanner
 from app.services.static_data.resolver import EvidenceItemCatalog
 from app.services.timelines.domain import (
@@ -35,7 +36,6 @@ from app.services.timelines.domain import (
     ItemEventFact,
     ParticipantStateFact,
     TimelineFact,
-    TimelineSnapshot,
 )
 from app.services.timelines.service import TimelineLoadResult
 
@@ -135,10 +135,12 @@ class JointEvidenceService:
             platform=request.platform, match_id=match_id
         )
         timeline = timeline_result.snapshot
-        participant_team_ids, selected_participant_id, selected_team_id = _join_rosters(
-            match=match,
-            timeline=timeline,
-            selected_puuid=request.puuid,
+        participant_team_ids, selected_participant_id, selected_team_id = (
+            join_match_timeline_rosters(
+                match=match,
+                timeline=timeline,
+                selected_puuid=request.puuid,
+            )
         )
         plan = self._planner.plan(
             platform=request.platform,
@@ -211,56 +213,6 @@ class JointEvidenceService:
         )
         for window in windows:
             self._metrics.joint_evidence_replay_coverage_total.inc(coverage=window.coverage)
-
-
-def _join_rosters(
-    *,
-    match: MatchSnapshot,
-    timeline: TimelineSnapshot,
-    selected_puuid: str,
-) -> tuple[dict[int, int], int, int]:
-    match_teams_by_puuid: dict[str, int] = {}
-    for participant in match.participants:
-        if participant.puuid in match_teams_by_puuid:
-            raise _invalid_roster()
-        match_teams_by_puuid[participant.puuid] = participant.team_id
-
-    timeline_puuids = list(timeline.participant_puuids.values())
-    if len(timeline_puuids) != len(set(timeline_puuids)):
-        raise _invalid_roster()
-    timeline_set = set(timeline_puuids)
-    match_set = set(match_teams_by_puuid)
-    if timeline_set != match_set:
-        raise _invalid_roster()
-
-    participant_team_ids: dict[int, int] = {}
-    for participant_id, puuid in timeline.participant_puuids.items():
-        participant_team_ids[participant_id] = match_teams_by_puuid[puuid]
-
-    selected_ids = [
-        participant_id
-        for participant_id, puuid in timeline.participant_puuids.items()
-        if puuid == selected_puuid
-    ]
-    if len(selected_ids) != 1:
-        raise ApiError(
-            status_code=404,
-            code="PLAYER_NOT_IN_MATCH",
-            message="The selected player did not participate in this match.",
-            retryable=False,
-        )
-    selected_participant_id = selected_ids[0]
-    selected_team_id = participant_team_ids[selected_participant_id]
-    return participant_team_ids, selected_participant_id, selected_team_id
-
-
-def _invalid_roster() -> ApiError:
-    return ApiError(
-        status_code=502,
-        code="RIOT_INVALID_RESPONSE",
-        message="Riot returned an invalid response.",
-        retryable=False,
-    )
 
 
 def _collect_item_ids(facts: Sequence[TimelineFact]) -> tuple[int, ...]:

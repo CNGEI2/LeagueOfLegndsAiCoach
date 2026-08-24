@@ -48,6 +48,7 @@ from app.services.analyses.rules_v1 import (
     SCORE_VERSION,
 )
 from app.services.analyses.scoring import ScoreEngine
+from app.services.evidence.roster import join_match_timeline_rosters
 from app.services.timelines.domain import TimelineSnapshot
 from app.services.timelines.service import TimelineLoadResult
 
@@ -210,6 +211,12 @@ class AnalysisService:
         timeline, timeline_unavailable = await self._load_timeline(
             platform=platform, match_id=match_id
         )
+        if timeline is not None:
+            join_match_timeline_rosters(
+                match=match,
+                timeline=timeline,
+                selected_puuid=puuid,
+            )
         selected = next(
             participant for participant in match.participants if participant.puuid == puuid
         )

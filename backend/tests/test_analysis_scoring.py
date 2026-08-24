@@ -129,6 +129,26 @@ def test_coverage_threshold_accepts_0_60_and_rejects_0_5999() -> None:
     assert round(0.5999, 2) == 0.60
 
 
+def test_published_coverage_does_not_round_up_across_the_overall_threshold() -> None:
+    metrics = (
+        _metric("kda"),
+        _metric("cs_per_min", team=50.0, same_role=50.0),
+        _metric("gold_per_min", team=50.0),
+        _metric("damage_per_min", team=50.0, same_role=50.0),
+        _metric("kill_participation"),
+        _metric("deaths_per_10", team=50.0, same_role=50.0),
+        _metric("vision_per_min"),
+        _metric("explicit_objective_events", team=50.0),
+    )
+
+    scores = ScoreEngine().compute(role="top", metrics=metrics)
+
+    assert scores.coverage == 0.5975
+    assert scores.coverage < OVERALL_COVERAGE_THRESHOLD
+    assert scores.overall_score is None
+    assert all(item.applied_weight == 0 for item in scores.dimensions)
+
+
 def test_below_threshold_coverage_suppresses_overall_and_applied_weights() -> None:
     metrics = (
         _metric("kda"),

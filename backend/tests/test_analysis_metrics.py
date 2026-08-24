@@ -87,6 +87,16 @@ def test_kill_participation_is_unavailable_when_team_kills_are_zero() -> None:
     assert metric.unavailable_reason == "division_by_zero"
 
 
+def test_kill_participation_is_unavailable_when_any_team_kill_value_is_missing() -> None:
+    match = replace_participant(standard_analysis_match(), "blue-top", kills=None)
+
+    metric = _by_key(match=match)["kill_participation"]
+
+    assert metric.status == "unavailable"
+    assert metric.value is None
+    assert metric.unavailable_reason == "missing_match_value"
+
+
 def test_team_percentile_assigns_average_rank_to_ties() -> None:
     comparison = next(
         item for item in _by_key()["cs_per_min"].comparisons if item.basis == "team_percentile"
@@ -108,6 +118,15 @@ def test_same_role_formula_matches_approved_delta_mapping() -> None:
     comparison = next(item for item in metric.comparisons if item.basis == "same_role")
     assert comparison.opponent_value == 5.0
     assert comparison.score == _same_role_score(7.0, 5.0, higher_is_better=True)
+
+
+def test_same_role_kill_participation_uses_each_players_own_team_total() -> None:
+    metric = _by_key()["kill_participation"]
+    comparison = next(item for item in metric.comparisons if item.basis == "same_role")
+
+    assert metric.value == 0.4
+    assert comparison.opponent_value == 0.38
+    assert comparison.score == _same_role_score(0.4, 0.38, higher_is_better=True)
 
 
 def test_ambiguous_same_role_opponent_omits_same_role_comparison() -> None:
@@ -172,6 +191,17 @@ def test_missing_participant_fields_are_typed_unavailable() -> None:
         assert by_key[key].status == "unavailable"
         assert by_key[key].value is None
         assert by_key[key].unavailable_reason == "missing_match_value"
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ("kills", "deaths", "assists", "cs", "gold_earned", "damage_to_champions", "vision_score"),
+)
+def test_negative_participant_counters_fail_before_metrics_are_returned(field_name: str) -> None:
+    match = replace_participant(standard_analysis_match(), SELECTED_PUUID, **{field_name: -1})
+
+    with pytest.raises(ValueError, match="invalid negative match value"):
+        _catalog(match=match)
 
 
 def test_win_loss_does_not_change_the_metric_catalog() -> None:

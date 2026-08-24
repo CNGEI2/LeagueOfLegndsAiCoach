@@ -34,7 +34,7 @@ def _round_score(value: float) -> float:
 
 
 def _round_coverage(value: float) -> float:
-    return round(_clamp(value, 0.0, 1.0), 2)
+    return round(_clamp(value, 0.0, 1.0), 4)
 
 
 def _signal_source(signal_key: str) -> tuple[str, ComparisonBasis]:

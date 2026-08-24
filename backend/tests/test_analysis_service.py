@@ -200,6 +200,30 @@ async def test_malformed_timeline_is_a_hard_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_match_timeline_roster_mismatch_fails_before_persistence() -> None:
+    timeline = standard_analysis_timeline()
+    mismatched = timeline.model_copy(
+        update={
+            "participant_puuids": {
+                participant_id: puuid
+                for participant_id, puuid in timeline.participant_puuids.items()
+                if puuid != SELECTED_PUUID
+            }
+        }
+    )
+    service, repository = _service(timeline_service=FakeTimelineService(snapshot=mismatched))
+
+    with pytest.raises(ApiError) as raised:
+        await service.create_or_reuse(
+            platform=Platform.NA1, match_id="NA1_ANALYSIS_FIXTURE", puuid=SELECTED_PUUID
+        )
+
+    assert raised.value.code == "RIOT_INVALID_RESPONSE"
+    assert repository.create_calls == []
+    assert repository.delete_calls == []
+
+
+@pytest.mark.asyncio
 async def test_unsupported_mode_is_mapped_and_player_absence_is_preserved() -> None:
     service, _repository = _service(
         match_service=FakeMatchService(error=_api_error("MATCH_EVIDENCE_UNSUPPORTED_MODE"))
