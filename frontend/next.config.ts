@@ -5,6 +5,9 @@ import type { NextConfig } from "next";
 loadEnvConfig(resolve(process.cwd(), ".."));
 
 const nextConfig: NextConfig = {
+  logging: {
+    incomingRequests: false,
+  },
   output: "standalone",
 };
 
