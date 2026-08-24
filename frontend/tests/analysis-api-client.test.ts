@@ -271,6 +271,16 @@ describe("analysisResponseSchema", () => {
     ];
     expect(analysisResponseSchema.safeParse(missing).success).toBe(false);
 
+    const missingDimension = clone(completedAnalysis());
+    const missingDimensionScores = clone(missingDimension.scores as Record<string, unknown>);
+    const missingDimensionItems = clone(
+      missingDimensionScores.dimensions as Array<Record<string, unknown>>,
+    );
+    missingDimensionItems[0].evidence_ids = ["missing"];
+    missingDimensionScores.dimensions = missingDimensionItems;
+    missingDimension.scores = missingDimensionScores;
+    expect(analysisResponseSchema.safeParse(missingDimension).success).toBe(false);
+
     const finding = (completedAnalysis().findings as unknown[])[0];
     const tooManyFindings = completedAnalysis({ findings: [finding, finding, finding, finding] });
     expect(analysisResponseSchema.safeParse(tooManyFindings).success).toBe(false);
@@ -278,6 +288,20 @@ describe("analysisResponseSchema", () => {
     const goal = (completedAnalysis().goals as unknown[])[0];
     const tooManyGoals = completedAnalysis({ goals: [goal, goal, goal, goal] });
     expect(analysisResponseSchema.safeParse(tooManyGoals).success).toBe(false);
+  });
+
+  it("rejects role drift between the result, scores, and goals", () => {
+    const scoreDrift = clone(completedAnalysis());
+    const scores = clone(scoreDrift.scores as Record<string, unknown>);
+    scores.role = "top";
+    scoreDrift.scores = scores;
+    expect(analysisResponseSchema.safeParse(scoreDrift).success).toBe(false);
+
+    const goalDrift = clone(completedAnalysis());
+    const goals = clone(goalDrift.goals as Array<Record<string, unknown>>);
+    goals[0].role = "top";
+    goalDrift.goals = goals;
+    expect(analysisResponseSchema.safeParse(goalDrift).success).toBe(false);
   });
 
   it("rejects extra fields and wrong scope or version literals", () => {

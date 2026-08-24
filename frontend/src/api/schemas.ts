@@ -823,16 +823,31 @@ export const analysisResponseSchema = z
   })
   .strict()
   .superRefine((response, context) => {
-    const catalog = new Set(response.metrics.map((metric) => metric.evidence_id));
+    const evidenceIds = response.metrics.map((metric) => metric.evidence_id);
+    const metricKeys = response.metrics.map((metric) => metric.metric_key);
+    if (
+      new Set(evidenceIds).size !== evidenceIds.length ||
+      new Set(metricKeys).size !== metricKeys.length
+    ) {
+      context.addIssue({ code: "custom", message: "analysis metrics must be unique" });
+    }
+    const catalog = new Set(evidenceIds);
     const referenced = [
+      ...response.scores.dimensions.flatMap((dimension) => dimension.evidence_ids),
       ...response.findings.flatMap((finding) => finding.evidence_ids),
       ...response.goals.flatMap((goal) => goal.evidence_ids),
     ];
     if (referenced.some((evidenceId) => !catalog.has(evidenceId))) {
       context.addIssue({
         code: "custom",
-        message: "finding or goal references missing evidence",
+        message: "analysis response references missing evidence",
       });
+    }
+    if (
+      response.scores.role !== response.role ||
+      response.goals.some((goal) => goal.role !== response.role)
+    ) {
+      context.addIssue({ code: "custom", message: "analysis response roles must agree" });
     }
   });
 

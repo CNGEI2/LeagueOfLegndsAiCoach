@@ -373,6 +373,39 @@ def test_valid_models_round_trip() -> None:
     assert _unavailable_metric().status == "unavailable"
 
 
+def test_result_rejects_cross_field_integrity_drift() -> None:
+    duplicate_metrics = _result().model_dump(mode="json")
+    duplicate_metrics["metrics"].append(duplicate_metrics["metrics"][0])
+    with pytest.raises(ValidationError):
+        DeterministicAnalysisResult.model_validate(duplicate_metrics)
+
+    missing_dimension_reference = _result().model_dump(mode="json")
+    missing_dimension_reference["scores"]["dimensions"][0]["evidence_ids"] = ["missing"]
+    with pytest.raises(ValidationError):
+        DeterministicAnalysisResult.model_validate(missing_dimension_reference)
+
+    role_drift = _result().model_dump(mode="json")
+    role_drift["scores"]["role"] = "top"
+    with pytest.raises(ValidationError):
+        DeterministicAnalysisResult.model_validate(role_drift)
+
+    metric_version_drift = _result().model_dump(mode="json")
+    metric_version_drift["metrics"][0]["metric_version"] = "other-metric-version"
+    with pytest.raises(ValidationError):
+        DeterministicAnalysisResult.model_validate(metric_version_drift)
+
+    score_version_drift = _result().model_dump(mode="json")
+    score_version_drift["scores"]["score_version"] = "other-score-version"
+    with pytest.raises(ValidationError):
+        DeterministicAnalysisResult.model_validate(score_version_drift)
+
+    goal_drift = _result().model_dump(mode="json")
+    goal_drift["goals"][0]["role"] = "top"
+    goal_drift["goals"][0]["rules_version"] = "other-rules-version"
+    with pytest.raises(ValidationError):
+        DeterministicAnalysisResult.model_validate(goal_drift)
+
+
 def test_ruleset_constants_are_immutable_and_match_v1() -> None:
     assert METRIC_VERSION == "deterministic-metrics-v1"
     assert SCORE_VERSION == "deterministic-score-v1"

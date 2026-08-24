@@ -188,6 +188,37 @@ def test_response_rejects_invalid_evidence_references() -> None:
         AnalysisResponse(**_response_kwargs(findings=(_finding(evidence_ids=("missing",)),)))
     with pytest.raises(ValidationError):
         AnalysisResponse(**_response_kwargs(goals=(_goal(evidence_ids=("missing",)),)))
+    broken_dimensions = list(_dimensions())
+    broken_dimensions[0] = broken_dimensions[0].model_copy(update={"evidence_ids": ("missing",)})
+    with pytest.raises(ValidationError):
+        AnalysisResponse(
+            **_response_kwargs(
+                scores=ScoreBreakdown(
+                    role="support",
+                    dimensions=tuple(broken_dimensions),
+                    overall_score=50.0,
+                    coverage=1.0,
+                    score_version="deterministic-score-v1",
+                )
+            )
+        )
+
+
+def test_response_rejects_role_and_nested_version_drift() -> None:
+    with pytest.raises(ValidationError):
+        AnalysisResponse(
+            **_response_kwargs(
+                scores=ScoreBreakdown(
+                    role="top",
+                    dimensions=_dimensions(),
+                    overall_score=50.0,
+                    coverage=1.0,
+                    score_version="deterministic-score-v1",
+                )
+            )
+        )
+    with pytest.raises(ValidationError):
+        AnalysisResponse(**_response_kwargs(goals=(_goal().model_copy(update={"role": "top"}),)))
 
 
 def test_response_rejects_more_than_three_findings_or_goals() -> None:

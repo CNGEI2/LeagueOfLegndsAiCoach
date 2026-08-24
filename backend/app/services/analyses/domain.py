@@ -155,3 +155,35 @@ class DeterministicAnalysisResult(DomainModel):
     score_version: str
     rules_version: str
     schema_version: Literal[1]
+
+    @model_validator(mode="after")
+    def validate_cross_field_integrity(self) -> Self:
+        evidence_ids = tuple(metric.evidence_id for metric in self.metrics)
+        metric_keys = tuple(metric.metric_key for metric in self.metrics)
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("metric evidence ids must be unique")
+        if len(metric_keys) != len(set(metric_keys)):
+            raise ValueError("metric keys must be unique")
+        catalog = set(evidence_ids)
+        referenced = (
+            *(
+                evidence_id
+                for dimension in self.scores.dimensions
+                for evidence_id in dimension.evidence_ids
+            ),
+            *(evidence_id for finding in self.findings for evidence_id in finding.evidence_ids),
+            *(evidence_id for goal in self.goals for evidence_id in goal.evidence_ids),
+        )
+        if any(evidence_id not in catalog for evidence_id in referenced):
+            raise ValueError("analysis result references missing evidence")
+        if self.scores.role != self.role:
+            raise ValueError("score role must match result role")
+        if any(goal.role != self.role for goal in self.goals):
+            raise ValueError("goal roles must match result role")
+        if any(metric.metric_version != self.metric_version for metric in self.metrics):
+            raise ValueError("metric versions must match result version")
+        if self.scores.score_version != self.score_version:
+            raise ValueError("score versions must match result version")
+        if any(goal.rules_version != self.rules_version for goal in self.goals):
+            raise ValueError("goal rules versions must match result version")
+        return self

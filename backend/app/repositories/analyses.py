@@ -103,6 +103,12 @@ class SqlAnalysisRepository:
             .returning(AnalysisJobRow)
         )
         async with self._session_factory.begin() as session:
+            await session.execute(
+                delete(AnalysisJobRow).where(
+                    AnalysisJobRow.idempotency_key == idempotency_key,
+                    AnalysisJobRow.expires_at <= now,
+                )
+            )
             inserted = (await session.execute(insert_job)).scalar_one_or_none()
             if inserted is not None:
                 session.add(
@@ -183,14 +189,19 @@ def _parse_result(payload: object) -> DeterministicAnalysisResult:
 
 def _stored_from_rows(job: AnalysisJobRow, evidence: AnalysisEvidenceRow) -> StoredAnalysis:
     result = _parse_result(evidence.deterministic_result)
+    expected_catalog = [metric.model_dump(mode="json") for metric in result.metrics]
     if (
-        job.input_hash != result.input_hash
+        job.platform != result.platform.value
+        or job.match_id != result.match_id
+        or job.selected_puuid != result.selected_puuid
+        or job.input_hash != result.input_hash
         or evidence.input_hash != result.input_hash
         or job.metric_version != result.metric_version
         or job.score_version != result.score_version
         or job.rules_version != result.rules_version
         or evidence.schema_version != result.schema_version
         or job.status != result.status
+        or evidence.evidence_catalog != expected_catalog
     ):
         raise _persistence_error()
     return StoredAnalysis(
@@ -203,11 +214,5 @@ def _stored_from_rows(job: AnalysisJobRow, evidence: AnalysisEvidenceRow) -> Sto
 
 
 def _assert_reuse_matches(stored: StoredAnalysis, requested: DeterministicAnalysisResult) -> None:
-    if (
-        stored.result.input_hash != requested.input_hash
-        or stored.result.metric_version != requested.metric_version
-        or stored.result.score_version != requested.score_version
-        or stored.result.rules_version != requested.rules_version
-        or stored.result.schema_version != requested.schema_version
-    ):
+    if stored.result != requested:
         raise _persistence_error()

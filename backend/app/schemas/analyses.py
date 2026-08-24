@@ -45,11 +45,28 @@ class AnalysisResponse(DomainModel):
 
     @model_validator(mode="after")
     def validate_evidence_references(self) -> Self:
-        catalog = {metric.evidence_id for metric in self.metrics}
+        evidence_ids = tuple(metric.evidence_id for metric in self.metrics)
+        metric_keys = tuple(metric.metric_key for metric in self.metrics)
+        if len(evidence_ids) != len(set(evidence_ids)) or len(metric_keys) != len(set(metric_keys)):
+            raise ValueError("analysis metrics must be unique")
+        catalog = set(evidence_ids)
         referenced = (
+            *(
+                evidence_id
+                for dimension in self.scores.dimensions
+                for evidence_id in dimension.evidence_ids
+            ),
             *(evidence_id for finding in self.findings for evidence_id in finding.evidence_ids),
             *(evidence_id for goal in self.goals for evidence_id in goal.evidence_ids),
         )
         if any(evidence_id not in catalog for evidence_id in referenced):
-            raise ValueError("finding or goal references missing evidence")
+            raise ValueError("analysis response references missing evidence")
+        if self.scores.role != self.role or any(goal.role != self.role for goal in self.goals):
+            raise ValueError("analysis response roles must agree")
+        if any(metric.metric_version != self.metric_version for metric in self.metrics):
+            raise ValueError("analysis response metric versions must agree")
+        if self.scores.score_version != self.score_version:
+            raise ValueError("analysis response score versions must agree")
+        if any(goal.rules_version != self.rules_version for goal in self.goals):
+            raise ValueError("analysis response rules versions must agree")
         return self

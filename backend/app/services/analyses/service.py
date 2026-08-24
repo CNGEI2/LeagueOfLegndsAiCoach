@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol, get_args
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from app.core.errors import ApiError, match_analysis_unsupported_mode, not_found
 from app.core.metrics import (
     ANALYSIS_API_OUTCOMES,
@@ -239,23 +241,26 @@ class AnalysisService:
             if timeline is None or match_metric_gap or scores.overall_score is None
             else "completed"
         )
-        result = DeterministicAnalysisResult(
-            status=status,
-            platform=platform,
-            match_id=match.match_id,
-            selected_puuid=puuid,
-            role=role,
-            metrics=metrics,
-            scores=scores,
-            findings=findings,
-            goals=goals,
-            unavailable_reasons=unavailable_reasons,
-            input_hash=input_hash,
-            metric_version=METRIC_VERSION,
-            score_version=SCORE_VERSION,
-            rules_version=RULES_VERSION,
-            schema_version=RESULT_SCHEMA_VERSION,
-        )
+        try:
+            result = DeterministicAnalysisResult(
+                status=status,
+                platform=platform,
+                match_id=match.match_id,
+                selected_puuid=puuid,
+                role=role,
+                metrics=metrics,
+                scores=scores,
+                findings=findings,
+                goals=goals,
+                unavailable_reasons=unavailable_reasons,
+                input_hash=input_hash,
+                metric_version=METRIC_VERSION,
+                score_version=SCORE_VERSION,
+                rules_version=RULES_VERSION,
+                schema_version=RESULT_SCHEMA_VERSION,
+            )
+        except ValidationError as error:
+            raise AnalysisInvariantError("computed analysis failed integrity validation") from error
         validate_reference_closure(result, timeline=timeline)
         after_compute = self._monotonic()
         now = self._clock()
