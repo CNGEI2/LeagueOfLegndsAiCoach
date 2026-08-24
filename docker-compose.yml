@@ -126,6 +126,8 @@ services:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     ports:
       - "3000:3000"
+    environment:
+      DETERMINISTIC_ANALYSIS_ENABLED: ${DETERMINISTIC_ANALYSIS_ENABLED:-false}
     depends_on:
       backend:
         condition: service_healthy

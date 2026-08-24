@@ -185,9 +185,26 @@ afterEach(() => {
 });
 
 describe("MatchDetailClient", () => {
+  it("keeps the deterministic analysis panel dark when the server capability is disabled", async () => {
+    vi.mocked(getMatchDetail).mockResolvedValue(matchDetailFixture);
+    const featureProps = { analysisEnabled: false };
+    render(
+      <MatchDetailClient
+        locale="en-US"
+        matchId="NA1_123456789"
+        puuid="selected-puuid"
+        platform="NA1"
+        {...featureProps}
+      />,
+    );
+
+    expect(await screen.findByText("Match details")).toBeVisible();
+    expect(screen.queryByTestId("analysis-section")).not.toBeInTheDocument();
+  });
+
   it("renders two five-player teams and identifies the selected player", async () => {
     vi.mocked(getMatchDetail).mockResolvedValue(matchDetailFixture);
-    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" analysisEnabled />);
 
     expect(await screen.findByRole("heading", { name: /match details/i })).toBeVisible();
     expect(screen.getAllByRole("row")).toHaveLength(12);
@@ -230,6 +247,7 @@ describe("MatchDetailClient", () => {
         matchId="NA1_123456789"
         puuid="selected-puuid"
         platform="NA1"
+        analysisEnabled
       />,
     );
 
@@ -247,7 +265,7 @@ describe("MatchDetailClient", () => {
   it("keeps internal participant IDs private and uses stable team-local labels", async () => {
     vi.mocked(getMatchDetail).mockResolvedValue(matchDetailFixture);
     const { container } = render(
-      <MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />,
+      <MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" analysisEnabled />,
     );
 
     expect(await screen.findByRole("heading", { name: /match details/i })).toBeVisible();
@@ -274,7 +292,7 @@ describe("MatchDetailClient", () => {
 
   it("localizes neutral participant labels in Chinese", async () => {
     vi.mocked(getMatchDetail).mockResolvedValue(matchDetailFixture);
-    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" analysisEnabled />);
 
     expect(await screen.findByRole("heading", { name: "对局详情" })).toBeVisible();
     expect(screen.getAllByText(/^玩家 [1-5]$/)).toHaveLength(9);
@@ -301,6 +319,7 @@ describe("MatchDetailClient", () => {
           matchId="NA1_123456789"
           puuid="selected-puuid"
           platform="NA1"
+          analysisEnabled
         />,
       );
 
@@ -311,7 +330,7 @@ describe("MatchDetailClient", () => {
 
   it("keeps numeric data visible when static data is unavailable", async () => {
     vi.mocked(getMatchDetail).mockResolvedValue(degradedMatchDetailFixture);
-    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" analysisEnabled />);
 
     expect(await screen.findByText(/静态游戏数据暂不可用/)).toBeVisible();
     expect(screen.getAllByText("7 / 3 / 8")).not.toHaveLength(0);
@@ -325,7 +344,7 @@ describe("MatchDetailClient", () => {
       .mockRejectedValueOnce(new ApiClientError("RIOT_RATE_LIMITED", { retry_after_seconds: 8 }, true, "request-429"))
       .mockResolvedValueOnce(matchDetailFixture);
     const user = userEvent.setup();
-    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+    render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" analysisEnabled />);
 
     expect(screen.getByRole("status")).toHaveTextContent("正在加载对局详情…");
     const alert = await screen.findByRole("alert");
@@ -339,7 +358,7 @@ describe("MatchDetailClient", () => {
 
   it("reports when the requested player is absent from the match", async () => {
     vi.mocked(getMatchDetail).mockResolvedValue({ ...matchDetailFixture, selected_puuid: "different-puuid" });
-    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" analysisEnabled />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("This player is not in the match data.");
     expect(screen.queryByTestId("replay-section")).not.toBeInTheDocument();
@@ -352,7 +371,7 @@ describe("MatchDetailClient", () => {
       selected_puuid: "different-puuid",
       request_id: null,
     });
-    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
+    render(<MatchDetailClient locale="en-US" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" analysisEnabled />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("This player is not in the match data.");
     expect(screen.queryByText("Support details")).not.toBeInTheDocument();
@@ -366,8 +385,8 @@ describe("MatchDetailClient", () => {
         return new Promise(() => undefined);
       })
       .mockResolvedValueOnce({ ...matchDetailFixture, match_id: "NA1_new" });
-    const view = render(<MatchDetailClient locale="en-US" matchId="NA1_old" puuid="selected-puuid" platform="NA1" />);
-    view.rerender(<MatchDetailClient locale="en-US" matchId="NA1_new" puuid="selected-puuid" platform="NA1" />);
+    const view = render(<MatchDetailClient locale="en-US" matchId="NA1_old" puuid="selected-puuid" platform="NA1" analysisEnabled />);
+    view.rerender(<MatchDetailClient locale="en-US" matchId="NA1_new" puuid="selected-puuid" platform="NA1" analysisEnabled />);
 
     await waitFor(() => expect(firstSignal?.aborted).toBe(true));
     expect(await screen.findByText(/NA1_new/)).toBeVisible();
@@ -394,6 +413,7 @@ describe("MatchDetailClient platform propagation", () => {
           matchId={`${platform}_123456789`}
           puuid="selected-puuid"
           platform={platform}
+          analysisEnabled
         />,
       );
 

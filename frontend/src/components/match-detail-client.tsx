@@ -36,11 +36,13 @@ export function MatchDetailClient({
   matchId,
   puuid,
   platform,
+  analysisEnabled,
 }: {
   locale: Locale;
   matchId: string;
   puuid: string;
   platform: Platform;
+  analysisEnabled: boolean;
 }) {
   const messages = getMessages(locale);
   const [state, setState] = useState<RequestState<MatchDetailResponse>>({ status: "loading" });
@@ -171,13 +173,15 @@ export function MatchDetailClient({
           messages={messages}
         />
       </div>
-      <AnalysisSection
-        locale={locale}
-        matchId={data.match_id}
-        puuid={data.selected_puuid}
-        platform={data.platform}
-        onEvidenceFactRequest={requestEvidenceFact}
-      />
+      {analysisEnabled ? (
+        <AnalysisSection
+          locale={locale}
+          matchId={data.match_id}
+          puuid={data.selected_puuid}
+          platform={data.platform}
+          onEvidenceFactRequest={requestEvidenceFact}
+        />
+      ) : null}
       <ReplaySection
         locale={locale}
         matchId={data.match_id}

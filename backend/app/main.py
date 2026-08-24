@@ -93,7 +93,8 @@ def create_app(
     application.include_router(players_router)
     application.include_router(matches_router)
     application.include_router(replays_router)
-    application.include_router(analyses_router)
+    if resolved_settings.deterministic_analysis_enabled:
+        application.include_router(analyses_router)
     return application
 
 

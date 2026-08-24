@@ -23,6 +23,7 @@ export default async function MatchDetailPage({
       matchId={matchId}
       puuid={puuid}
       platform={parsedPlatform.data}
+      analysisEnabled={process.env.DETERMINISTIC_ANALYSIS_ENABLED === "true"}
     />
   );
 }

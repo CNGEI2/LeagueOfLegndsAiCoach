@@ -211,6 +211,28 @@ def test_disabled_create_and_get_are_dark_404(disabled_client: TestClient) -> No
         _assert_private(response.text)
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("POST", "/api/v1/analyses", {}),
+        ("POST", "/api/v1/analyses", {"coaching": True}),
+        ("GET", "/api/v1/analyses/not-a-uuid", None),
+        ("GET", f"/api/v1/analyses/{ANALYSIS_ID}?locale=unsupported", None),
+    ],
+)
+def test_disabled_routes_stay_dark_before_input_validation(
+    disabled_client: TestClient,
+    method: str,
+    path: str,
+    json_body: dict[str, object] | None,
+) -> None:
+    response = disabled_client.request(method, path, json=json_body)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+    _assert_private(response.text)
+
+
 def test_create_validates_body_calls_service_without_locale_and_echoes_locale(
     analysis_client: tuple[TestClient, RecordingAnalysisService],
 ) -> None:
