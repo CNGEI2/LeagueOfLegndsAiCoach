@@ -16,6 +16,11 @@ function kda(participant: HydratedParticipant, messages: Messages) {
   return `${participant.kills} / ${participant.deaths} / ${participant.assists}`;
 }
 
+function participantRole(role: string | null, messages: Messages) {
+  if (role === "UTILITY") return messages.analysisRoleSupport;
+  return role ?? messages.unknownStatistic;
+}
+
 export function MatchTeamTable({
   caption,
   participants,
@@ -70,7 +75,7 @@ export function MatchTeamTable({
                     `${messages.champion} #${participant.champion_id}`
                   )}
                 </td>
-                <td>{participant.role ?? messages.unknownStatistic}</td>
+                <td>{participantRole(participant.role, messages)}</td>
                 <td>{kda(participant, messages)}</td>
                 <td>{numeric(participant.cs, messages)}</td>
                 <td>{numeric(participant.gold_earned, messages)}</td>

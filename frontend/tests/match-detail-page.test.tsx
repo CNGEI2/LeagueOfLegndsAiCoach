@@ -282,6 +282,33 @@ describe("MatchDetailClient", () => {
     expect(screen.getByRole("note").textContent).not.toMatch(/操作|意识|意图|因果/);
   });
 
+  it.each([
+    ["en-US", "Support"],
+    ["zh-CN", "辅助"],
+  ] as const)(
+    "maps the upstream UTILITY role to the product Support label in %s",
+    async (locale, expectedRole) => {
+      vi.mocked(getMatchDetail).mockResolvedValue({
+        ...matchDetailFixture,
+        blue_team: [
+          { ...matchDetailFixture.blue_team[0], role: "UTILITY" },
+          ...matchDetailFixture.blue_team.slice(1),
+        ],
+      });
+      const { container } = render(
+        <MatchDetailClient
+          locale={locale}
+          matchId="NA1_123456789"
+          puuid="selected-puuid"
+          platform="NA1"
+        />,
+      );
+
+      expect(await screen.findByText(expectedRole)).toBeVisible();
+      expect(container).not.toHaveTextContent(/UTILITY|Utility/);
+    },
+  );
+
   it("keeps numeric data visible when static data is unavailable", async () => {
     vi.mocked(getMatchDetail).mockResolvedValue(degradedMatchDetailFixture);
     render(<MatchDetailClient locale="zh-CN" matchId="NA1_123456789" puuid="selected-puuid" platform="NA1" />);
