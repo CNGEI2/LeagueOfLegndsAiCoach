@@ -1,4 +1,4 @@
-.PHONY: install dev-backend dev-frontend dev-replay-worker test lint typecheck verify verify-postgres verify-replay verify-replay-ffmpeg verify-replay-postgres smoke-riot smoke-replay docker-up docker-down e2e-replay-compose
+.PHONY: install dev-backend dev-frontend dev-replay-worker test lint typecheck verify verify-postgres verify-replay verify-replay-ffmpeg verify-replay-postgres smoke-riot smoke-analysis smoke-replay docker-up docker-down e2e-replay-compose
 
 install:
 	python3 -m venv backend/.venv
@@ -51,6 +51,9 @@ verify-replay-postgres:
 
 smoke-riot:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/smoke_riot.py
+
+smoke-analysis:
+	PYTHONPATH=backend backend/.venv/bin/python scripts/smoke_analysis.py
 
 smoke-replay:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/smoke_replay.py

@@ -29,6 +29,25 @@ def test_compose_declares_joint_evidence_disabled_by_default() -> None:
     assert "JOINT_EVIDENCE_ENABLED: ${JOINT_EVIDENCE_ENABLED:-false}" in compose
 
 
+def test_analysis_runtime_configuration_stays_backend_only_and_dark_by_default() -> None:
+    env_example = (REPOSITORY_ROOT / ".env.example").read_text()
+    compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text()
+    backend_section = compose.split("  backend:\n", 1)[1].split("  replay-worker:\n", 1)[0]
+    worker_section = compose.split("  replay-worker:\n", 1)[1].split("  frontend:\n", 1)[0]
+
+    assert "DETERMINISTIC_ANALYSIS_ENABLED=false" in env_example
+    assert "ANALYSIS_RETENTION_DAYS=30" in env_example
+    assert (
+        "DETERMINISTIC_ANALYSIS_ENABLED: ${DETERMINISTIC_ANALYSIS_ENABLED:-false}"
+        in backend_section
+    )
+    assert "ANALYSIS_RETENTION_DAYS: ${ANALYSIS_RETENTION_DAYS:-30}" in backend_section
+    assert "DETERMINISTIC_ANALYSIS_ENABLED" not in worker_section
+    assert "ANALYSIS_RETENTION_DAYS" not in worker_section
+    assert "NEXT_PUBLIC_DETERMINISTIC" not in env_example
+    assert "NEXT_PUBLIC_ANALYSIS" not in env_example
+
+
 def test_readme_documents_joint_evidence_rollout_and_rollback() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text()
     assert "0004" in readme
@@ -38,3 +57,22 @@ def test_readme_documents_joint_evidence_rollout_and_rollback() -> None:
     assert "joint_evidence_" in readme
     assert "OpenAI" in readme
     assert "migration" in readme.lower()
+
+
+def test_readme_documents_deterministic_analysis_boundary_and_rollout() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text()
+    for required in (
+        "0005_deterministic_analyses",
+        "DETERMINISTIC_ANALYSIS_ENABLED",
+        "ANALYSIS_RETENTION_DAYS",
+        "make smoke-analysis",
+        "POST /api/v1/analyses",
+        "GET /api/v1/analyses/{analysis_id}",
+        "UTILITY -> Support",
+        "UTILITY -> 辅助",
+        "not a Riot score, rank, MMR, or ELO",
+        "不是 Riot 评分、段位、MMR 或 ELO",
+        "analysis_api_requests_total",
+        "analysis_cache_total",
+    ):
+        assert required in readme
