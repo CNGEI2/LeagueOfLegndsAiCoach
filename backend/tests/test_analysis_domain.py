@@ -245,6 +245,13 @@ def test_metric_comparison_rejects_scores_outside_bounds() -> None:
         MetricComparison(basis="team_percentile", score=100.01)
 
 
+def test_metric_evidence_rejects_duplicate_comparison_bases() -> None:
+    payload = _available_metric().model_dump(mode="json")
+    payload["comparisons"].append(payload["comparisons"][0])
+    with pytest.raises(ValidationError):
+        MetricEvidence.model_validate(payload)
+
+
 def test_dimension_score_rejects_negative_weights_and_out_of_range_scores() -> None:
     with pytest.raises(ValidationError):
         _dimension(dimension="economy", configured_weight=-1)
@@ -306,6 +313,27 @@ def test_score_breakdown_rejects_overall_score_outside_bounds() -> None:
             dimensions=_dimensions(),
             overall_score=100.01,
             coverage=1.0,
+            score_version="deterministic-score-v1",
+        )
+
+
+@pytest.mark.parametrize(
+    ("role", "coverage"),
+    [
+        (None, 1.0),
+        ("support", OVERALL_COVERAGE_THRESHOLD - 0.0001),
+    ],
+)
+def test_score_breakdown_rejects_overall_without_role_or_coverage(
+    role: str | None,
+    coverage: float,
+) -> None:
+    with pytest.raises(ValidationError):
+        ScoreBreakdown(
+            role=role,
+            dimensions=_dimensions(),
+            overall_score=50.0,
+            coverage=coverage,
             score_version="deterministic-score-v1",
         )
 
@@ -404,6 +432,20 @@ def test_result_rejects_cross_field_integrity_drift() -> None:
     goal_drift["goals"][0]["rules_version"] = "other-rules-version"
     with pytest.raises(ValidationError):
         DeterministicAnalysisResult.model_validate(goal_drift)
+
+    unavailable_score_status_drift = _result().model_dump(mode="json")
+    unavailable_score_status_drift["role"] = None
+    unavailable_score_status_drift["scores"]["role"] = None
+    unavailable_score_status_drift["scores"]["overall_score"] = None
+    with pytest.raises(ValidationError):
+        DeterministicAnalysisResult.model_validate(unavailable_score_status_drift)
+
+    unavailable_score_finding_drift = _result().model_dump(mode="json")
+    unavailable_score_finding_drift["status"] = "partial"
+    unavailable_score_finding_drift["scores"]["coverage"] = OVERALL_COVERAGE_THRESHOLD - 0.0001
+    unavailable_score_finding_drift["scores"]["overall_score"] = None
+    with pytest.raises(ValidationError):
+        DeterministicAnalysisResult.model_validate(unavailable_score_finding_drift)
 
 
 def test_ruleset_constants_are_immutable_and_match_v1() -> None:

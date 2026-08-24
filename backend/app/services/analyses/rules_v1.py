@@ -2,6 +2,9 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Literal
 
+from app.services.analyses.domain import (
+    OVERALL_COVERAGE_THRESHOLD as _OVERALL_COVERAGE_THRESHOLD,
+)
 from app.services.analyses.domain import AnalysisRole, DimensionKey
 
 METRIC_VERSION = "deterministic-metrics-v1"
@@ -9,7 +12,7 @@ SCORE_VERSION = "deterministic-score-v1"
 RULES_VERSION = "deterministic-rules-v1"
 RESULT_SCHEMA_VERSION = 1
 
-OVERALL_COVERAGE_THRESHOLD = 0.60
+OVERALL_COVERAGE_THRESHOLD = _OVERALL_COVERAGE_THRESHOLD
 MIN_DIMENSION_COVERAGE_FOR_FINDING = 0.50
 FINDING_STRENGTH_MIN = 75
 FINDING_STRENGTH_HIGH_MIN = 90

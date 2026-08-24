@@ -8,6 +8,7 @@ from app.services.riot.dto import (
     SummonerDto,
     TimelineDto,
     validate_match_ids,
+    validate_match_payload,
     validate_riot_model,
     validate_timeline_payload,
 )
@@ -77,7 +78,7 @@ class RiotGateway:
             params=None,
             not_found_code="MATCH_NOT_FOUND",
         )
-        return validate_riot_model(MatchDto, payload)
+        return validate_match_payload(payload, match_id=match_id)
 
     async def get_match_timeline(self, *, platform: Platform, match_id: str) -> TimelineDto:
         host = routes_for(platform).regional_host

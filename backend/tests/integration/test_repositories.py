@@ -1,11 +1,15 @@
 import asyncio
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.core.errors import ApiError
 from app.core.routing import Platform
+from app.models.match import MatchRow
 from app.models.player import PlayerRow
 from app.models.replay import ReplayUploadRow
 from app.repositories.matches import MatchCacheConflict, SqlMatchRepository
@@ -338,6 +342,31 @@ async def test_match_repository_refreshes_identical_snapshot_without_overwriting
         )
         == snapshot
     )
+
+
+@pytest.mark.asyncio
+async def test_match_repository_rejects_snapshot_identity_drift(session_factory) -> None:
+    repository = SqlMatchRepository(session_factory)
+    snapshot = make_snapshot()
+    fetched_at = datetime.now(UTC)
+    await repository.put(snapshot, fetched_at=fetched_at)
+    payload = snapshot.model_dump(mode="json")
+    payload["match_id"] = "NA1_other"
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    async with session_factory.begin() as session:
+        row = await session.get(MatchRow, snapshot.match_id)
+        assert row is not None
+        row.snapshot = payload
+        row.snapshot_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    with pytest.raises(ApiError) as raised:
+        await repository.get(
+            platform=Platform.NA1,
+            match_id=snapshot.match_id,
+            fresh_after=fetched_at - timedelta(seconds=1),
+        )
+    assert raised.value.status_code == 502
+    assert raised.value.code == "RIOT_INVALID_RESPONSE"
 
 
 @pytest.mark.asyncio

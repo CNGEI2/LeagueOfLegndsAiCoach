@@ -28,6 +28,7 @@ DIMENSION_ORDER: tuple[DimensionKey, ...] = (
     "team_objectives",
     "vision",
 )
+OVERALL_COVERAGE_THRESHOLD = 0.60
 
 _UPSTREAM_ROLE_MAP: Mapping[str, AnalysisRole] = MappingProxyType(
     {
@@ -69,6 +70,9 @@ class MetricEvidence(DomainModel):
 
     @model_validator(mode="after")
     def validate_availability_shape(self) -> Self:
+        bases = tuple(comparison.basis for comparison in self.comparisons)
+        if len(bases) != len(set(bases)):
+            raise ValueError("comparisons must be unique by basis")
         if self.status == "available":
             if self.value is None or self.unit is None:
                 raise ValueError("available metrics require a value and unit")
@@ -114,6 +118,9 @@ class ScoreBreakdown(DomainModel):
         observed = tuple(item.dimension for item in self.dimensions)
         if observed != DIMENSION_ORDER:
             raise ValueError("scores require five unique dimensions in canonical order")
+        overall_forbidden = self.role is None or self.coverage < OVERALL_COVERAGE_THRESHOLD
+        if overall_forbidden and self.overall_score is not None:
+            raise ValueError("overall score requires a known role and sufficient coverage")
         return self
 
 
@@ -186,4 +193,9 @@ class DeterministicAnalysisResult(DomainModel):
             raise ValueError("score versions must match result version")
         if any(goal.rules_version != self.rules_version for goal in self.goals):
             raise ValueError("goal rules versions must match result version")
+        score_unavailable = self.role is None or self.scores.coverage < OVERALL_COVERAGE_THRESHOLD
+        if score_unavailable and self.status != "partial":
+            raise ValueError("unavailable overall score requires partial status")
+        if score_unavailable and self.findings:
+            raise ValueError("unavailable overall score must not include findings")
         return self

@@ -275,6 +275,13 @@ def validate_match_ids(payload: object, *, max_count: int) -> tuple[str, ...]:
     return tuple(match_ids)
 
 
+def validate_match_payload(payload: object, *, match_id: str) -> MatchDto:
+    match = validate_riot_model(MatchDto, payload)
+    if match.metadata.match_id != match_id:
+        raise _invalid_response()
+    return match
+
+
 def validate_timeline_payload(payload: object, *, match_id: str) -> TimelineDto:
     try:
         prepared = _prepare_timeline_payload(payload)

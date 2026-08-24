@@ -319,6 +319,25 @@ async def test_gateway_validates_nested_match_data_and_ignores_unknown_fields() 
 
 
 @pytest.mark.asyncio
+async def test_gateway_rejects_match_identity_mismatch() -> None:
+    payload = copy.deepcopy(MATCH_PAYLOAD)
+    payload["metadata"]["matchId"] = "NA1_other"
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=payload)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as raw_client:
+        with pytest.raises(ApiError) as caught:
+            await RiotGateway(RiotHttpClient(api_key="RGAPI-fake", client=raw_client)).get_match(
+                platform=Platform.NA1,
+                match_id="NA1_requested",
+            )
+
+    assert caught.value.status_code == 502
+    assert caught.value.code == "RIOT_INVALID_RESPONSE"
+
+
+@pytest.mark.asyncio
 async def test_gateway_rejects_match_without_critical_metadata_match_id() -> None:
     """A match lacking its identity must not be normalized as a valid match."""
     invalid_payload = dict(MATCH_PAYLOAD)

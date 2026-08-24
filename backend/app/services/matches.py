@@ -170,10 +170,11 @@ class MatchService:
             fresh_after=retention_boundary,
         )
         if cached is not None:
-            return cached
+            return _validate_snapshot_identity(cached, platform=platform, match_id=match_id)
         async with self._semaphore:
             dto = await self._gateway.get_match(platform=platform, match_id=match_id)
         snapshot = normalize_match(dto, platform)
+        _validate_snapshot_identity(snapshot, platform=platform, match_id=match_id)
         await self._match_repository.put(snapshot, fetched_at=now)
         await self._match_repository.delete_expired(before=retention_boundary)
         return snapshot
@@ -261,3 +262,19 @@ def _unsupported_evidence_mode() -> ApiError:
         message="Match evidence is not supported for this game mode.",
         retryable=False,
     )
+
+
+def _validate_snapshot_identity(
+    snapshot: MatchSnapshot,
+    *,
+    platform: Platform,
+    match_id: str,
+) -> MatchSnapshot:
+    if snapshot.platform != platform or snapshot.match_id != match_id:
+        raise ApiError(
+            status_code=502,
+            code="RIOT_INVALID_RESPONSE",
+            message="Riot returned an invalid response.",
+            retryable=False,
+        )
+    return snapshot

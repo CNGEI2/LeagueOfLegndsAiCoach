@@ -3,11 +3,13 @@ import json
 from datetime import datetime
 from typing import Protocol, cast
 
+from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.errors import ApiError
 from app.core.routing import Platform
 from app.models.match import MatchRow
 from app.schemas.domain import MatchSnapshot
@@ -51,14 +53,16 @@ class SqlMatchRepository:
         match_id: str,
         fresh_after: datetime,
     ) -> MatchSnapshot | None:
-        statement = select(MatchRow.snapshot).where(
+        statement = select(MatchRow).where(
             MatchRow.platform == platform.value,
             MatchRow.match_id == match_id,
             MatchRow.fetched_at >= fresh_after,
         )
         async with self._session_factory() as session:
-            snapshot = (await session.execute(statement)).scalar_one_or_none()
-        return MatchSnapshot.model_validate(snapshot) if snapshot is not None else None
+            row = (await session.execute(statement)).scalar_one_or_none()
+        return (
+            None if row is None else _snapshot_from_row(row, platform=platform, match_id=match_id)
+        )
 
     async def get_for_replay_binding(
         self,
@@ -66,13 +70,15 @@ class SqlMatchRepository:
         platform: Platform,
         match_id: str,
     ) -> MatchSnapshot | None:
-        statement = select(MatchRow.snapshot).where(
+        statement = select(MatchRow).where(
             MatchRow.platform == platform.value,
             MatchRow.match_id == match_id,
         )
         async with self._session_factory() as session:
-            snapshot = (await session.execute(statement)).scalar_one_or_none()
-        return MatchSnapshot.model_validate(snapshot) if snapshot is not None else None
+            row = (await session.execute(statement)).scalar_one_or_none()
+        return (
+            None if row is None else _snapshot_from_row(row, platform=platform, match_id=match_id)
+        )
 
     async def put(self, snapshot: MatchSnapshot, *, fetched_at: datetime) -> None:
         normalized_snapshot = snapshot.model_dump(mode="json")
@@ -114,6 +120,44 @@ class SqlMatchRepository:
 def _snapshot_hash(snapshot: dict[str, object]) -> str:
     canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _snapshot_from_row(
+    row: MatchRow,
+    *,
+    platform: Platform,
+    match_id: str,
+) -> MatchSnapshot:
+    if (
+        row.platform != platform.value
+        or row.match_id != match_id
+        or row.schema_version != SCHEMA_VERSION
+        or _snapshot_hash(row.snapshot) != row.snapshot_hash
+    ):
+        raise _invalid_cached_match()
+    try:
+        snapshot = MatchSnapshot.model_validate(row.snapshot)
+    except ValidationError as error:
+        raise _invalid_cached_match() from error
+    if (
+        snapshot.platform != platform
+        or snapshot.match_id != match_id
+        or snapshot.queue_id != row.queue_id
+        or snapshot.game_version != row.game_version
+        or snapshot.started_at != row.started_at
+        or snapshot.duration_seconds != row.duration_seconds
+    ):
+        raise _invalid_cached_match()
+    return snapshot
+
+
+def _invalid_cached_match() -> ApiError:
+    return ApiError(
+        status_code=502,
+        code="RIOT_INVALID_RESPONSE",
+        message="Riot returned an invalid response.",
+        retryable=False,
+    )
 
 
 def _rowcount(result: object) -> int:

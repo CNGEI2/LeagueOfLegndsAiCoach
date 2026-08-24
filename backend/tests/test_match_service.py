@@ -548,6 +548,30 @@ async def test_evidence_context_requires_selected_puuid_exactly_once(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["cache", "gateway"])
+async def test_evidence_context_rejects_snapshot_identity_drift(
+    match_service_dependencies: MatchServiceDependencies,
+    source: str,
+) -> None:
+    deps = match_service_dependencies
+    drifted = normalize_match(deps.match_dto("NA1_other"), Platform.NA1)
+    if source == "cache":
+        deps.match_repository.cached["NA1_requested"] = drifted
+    else:
+        deps.riot_gateway.matches["NA1_requested"] = deps.match_dto("NA1_other")
+
+    with pytest.raises(ApiError) as raised:
+        await make_service(deps).get_evidence_context(
+            platform=Platform.NA1,
+            match_id="NA1_requested",
+            puuid="selected-puuid",
+        )
+
+    assert raised.value.status_code == 502
+    assert raised.value.code == "RIOT_INVALID_RESPONSE"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("queue_id", [400, 420])
 async def test_evidence_context_accepts_analysis_queues(
     match_service_dependencies: MatchServiceDependencies, queue_id: int

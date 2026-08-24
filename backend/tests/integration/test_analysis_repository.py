@@ -202,3 +202,37 @@ async def test_get_rejects_job_identity_drift(session_factory) -> None:
     with pytest.raises(ApiError) as exc_info:
         await repository.get(analysis_id=stored.analysis_id, now=now)
     assert exc_info.value.code == "INTERNAL_SERVER_ERROR"
+
+
+@pytest.mark.parametrize("drift", ["duplicate_comparison", "invalid_overall"])
+@pytest.mark.asyncio
+async def test_get_rejects_invalid_result_invariants(session_factory, drift: str) -> None:
+    repository = SqlAnalysisRepository(session_factory)
+    now = _now()
+    stored, _created = await repository.create_or_reuse(
+        idempotency_key=("d0" if drift == "duplicate_comparison" else "d1") * 32,
+        result=make_analysis_result(match_id="NA1_result_drift"),
+        now=now,
+        expires_at=now + timedelta(days=30),
+    )
+    payload = stored.result.model_dump(mode="json")
+    if drift == "duplicate_comparison":
+        comparison = {
+            "basis": "team_percentile",
+            "score": 50.0,
+            "opponent_value": None,
+        }
+        payload["metrics"][0]["comparisons"] = [comparison, comparison]
+    else:
+        payload["role"] = None
+        payload["scores"]["role"] = None
+    async with session_factory.begin() as session:
+        await session.execute(
+            update(AnalysisEvidenceRow)
+            .where(AnalysisEvidenceRow.analysis_id == stored.analysis_id)
+            .values(deterministic_result=payload)
+        )
+
+    with pytest.raises(ApiError) as exc_info:
+        await repository.get(analysis_id=stored.analysis_id, now=now)
+    assert exc_info.value.code == "INTERNAL_SERVER_ERROR"
